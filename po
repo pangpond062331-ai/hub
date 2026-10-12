@@ -7,13 +7,16 @@
 	สิ่งที่มีในเวอร์ชันนี้
 	--------------------------------------------------------------------
 	* เมนู GUI ภาษาไทย พร้อมปุ่มเปิด/ปิด (ปุ่ม ☰ เปิด / ปุ่ม ✕ ปิด) และลากหน้าต่างได้
-	* 4 แท็บ: [หน้าหลัก] [ตัวละคร] [สร้างของ & วาร์ป] [ประสิทธิภาพ]
+	* 5 แท็บ: [หน้าหลัก] [ตัวละคร] [สร้าง/วาร์ป] [Aimbot] [ประสิทธิภาพ]
 	* ข้อมูล Real-time: พิกัดตัวละคร, FPS, Ping, เวลาที่เปิดใช้งาน, สถานะโหมดต่าง ๆ
-	* ระบบตัวละคร: วิ่งเร็ว (ปรับค่าได้), NoClip, โหมดบิน (ปรับความเร็วได้), รีเลือดเต็ม
+	* ระบบตัวละคร: วิ่งเร็ว (ลากสไลเดอร์ปรับ 16-300 + คงค่าข้ามการเกิดใหม่), NoClip,
+	  โหมดบิน (ลากสไลเดอร์ปรับ 25-500), รีเลือดเต็ม
 	* ระบบสร้างของ/วาร์ป: เสก Part ทดสอบ, วาร์ปไปจุดที่เมาส์, ประตูวาร์ปอัตโนมัติ (Auto Gate)
 	  Waypoint หลายจุดพร้อมลิสต์ใน GUI (บันทึก/วาร์ป/ลบรายจุด), ล้างของที่เสกทั้งหมด
-	* ระบบ Boost FPS: ลดคุณภาพกราฟฟิก, ปิดเอฟเฟก Lighting, ล้างหมอก, ปิด Particle/Beam/Trail
-	  ทั่วแมป (เฉพาะฝั่ง Client) และคืนสภาพเดิมได้เมื่อกดปิด
+	* ระบบ Boost FPS: ลดคุณภาพกราฟฟิกขั้นต่ำสุด, เปลี่ยนวัสดุทุกชิ้นเป็น SmoothPlastic (ลุคดินน้ำมัน),
+	  ปิด Reflectance/Texture/พื้นผิว PBR, ปิดเอฟเฟกทุกชนิด, ล้างหมอก — คืนสภาพเดิมได้เมื่อกดปิด
+	* ระบบ Aimbot (ล็อกเป้าหมายทดสอบ): สไลเดอร์ FOV/ระยะ/ความไว, เลือกจุดเล็ง (Head/ลำตัวบน/HRP),
+	  โหมดมองเห็นเท่านั้น, วงกลมแสดงขอบเขต FOV กลางจอ — สำหรับทดสอบระบบเล็งในเกมตัวเอง (Client)
 
 	คีย์ลัดที่เหลืออยู่ (เหลือเฉพาะ 3 ตัว ตามที่ผู้ใช้ระบุ ส่วนอื่นใช้ผ่านเมนู GUI)
 	--------------------------------------------------------------------
@@ -54,9 +57,19 @@ local speedMode = false                                          -- สถาน
 local noClipEnabled = false                                      -- สถานะโหมด NoClip (เดินทะลุ)
 local flyEnabled = false                                         -- สถานะโหมดบิน
 local walkSpeedValue = 50                                        -- ค่าความเร็ววิ่งที่ใช้เมื่อเปิดโหมดวิ่งเร็ว
-local flySpeed = 100                                             -- ค่าความเร็วบิน (ปรับด้วยปุ่ม +/- ในเมนู)
+local flySpeed = 100                                             -- ค่าความเร็วบิน (ปรับด้วยสไลเดอร์ในเมนู)
 local WALK_DEFAULT = 16                                          -- ค่าความเร็ววิ่งปกติของ Roblox (ใช้ตอนปิดโหมด)
 local flyConnection = nil                                        -- connection ของลูปบิน (ใช้ Disconnect เมื่อปิด)
+
+-- สถานะระบบ Aimbot (ล็อกเป้าหมาย — สำหรับทดสอบระบบเล็งในเกมของตัวเอง ทำงานฝั่ง Client)
+local aimbotEnabled = false                                      -- สถานะ Aimbot (true = เปิด)
+local aimFov = 45                                                -- มุมมองการจับเป้า (องศา) เริ่มต้น 45
+local aimRange = 250                                             -- ระยะการจับเป้า (สตั๊ด) เริ่มต้น 250
+local aimSmooth = 50                                             -- ความไวในการเลื่อนกล้อง 0-100 (มาก = ตามเร็ว)
+local aimPartIndex = 1                                           -- จุดเล็ง (1=Head, 2=UpperTorso, 3=HumanoidRootPart)
+local aimVisibility = true                                       -- เช็คการมองเห็น (ไม่เล็งทะลุกำแพง)
+local aimCandidates = {}                                         -- รายการเป้าหมายที่สแกนไว้ (รีเฟรชทุก 0.25 วินาที)
+local aimBindName = "DevUtilityV2_Aimbot"                        -- ชื่อสำหรับ BindToRenderStep (ห้ามซ้ำกับที่อื่น)
 
 -- สถานะของ Teleport Builder และ Waypoint
 local point1 = nil                                               -- CFrame ของจุดเริ่มต้น/Entrance ของประตูวาร์ป
@@ -81,6 +94,7 @@ local lastFpsTime = os.clock()
 local ui = {}                                                    -- เก็บ reference ของ UI ที่ต้องอัปเดตภายหลัง
 local toggleRegistry = {}                                        -- รายการปุ่ม toggle ทั้งหมด เพื่อ refresh พร้อมกัน
 local waypointListFrame = nil                                    -- ScrollingFrame ของลิสต์ Waypoint (กำหนดค่าตอนสร้าง GUI)
+local fovCircle = nil                                            -- Frame วงกลมแสดงขอบเขต Aimbot/FOV (กำหนดค่าตอนสร้าง GUI)
 local refreshToggles                                             -- forward: ฟังก์ชันอัปเดตป้าย UI ทุกจุด (กำหนดค่าทีหลัง)
 local rebuildWaypointList                                        -- forward: ฟังก์ชันสร้างลิสต์ Waypoint ใหม่ (กำหนดค่าทีหลัง)
 
@@ -122,11 +136,12 @@ end
 -- สร้างข้อความสรุปสถานะโหมดต่าง ๆ สำหรับแสดงบน HUD (ใช้ทั้งใน GUI และอัปเดตอัตโนมัติ)
 local function statusString()
 	return string.format(                                        -- ต่อข้อความหลายส่วน
-		"วิ่งเร็ว: %s | NoClip: %s | บิน: %s | Boost FPS: %s",  -- รูปแบบข้อความสรุป
+		"📊 วิ่งเร็ว: %s | NoClip: %s | บิน: %s | Boost FPS: %s | Aimbot: %s", -- รูปแบบข้อความสรุป (มีไอคอนแผ่นกราฟนำหน้า)
 		speedMode and "เปิด" or "ปิด",                           -- สถานะวิ่งเร็ว
 		noClipEnabled and "เปิด" or "ปิด",                       -- สถานะ NoClip
 		flyEnabled and "เปิด" or "ปิด",                          -- สถานะบิน
-		boostBackup and "เปิด" or "ปิด"                          -- สถานะ Boost FPS
+		boostBackup and "เปิด" or "ปิด",                         -- สถานะ Boost FPS
+		aimbotEnabled and "เปิด" or "ปิด"                        -- สถานะ Aimbot
 	)
 end
 
@@ -136,11 +151,14 @@ local function onCharacterAdded(newCharacter)
 	rootPart = newCharacter:WaitForChild("HumanoidRootPart", 10)  -- รอ Part หลักของตัวละคร (สูงสุด 10 วิ)
 	humanoid = newCharacter:WaitForChild("Humanoid", 10)          -- รอ Humanoid (สูงสุด 10 วิ)
 	if humanoid then                                             -- ถ้าหา Humanoid เจอ
-		humanoid.WalkSpeed = WALK_DEFAULT                         -- คืนค่าความเร็ววิ่งเป็นค่าปกติของ Roblox
+		if speedMode then                                        -- ถ้าผู้ใช้เปิดโหมดวิ่งเร็วไว้
+			humanoid.WalkSpeed = walkSpeedValue                  -- คงความเร็วเดิมไว้ข้ามการเกิดใหม่ (ไม่รีเซ็ตเป็น 16)
+		else                                                     -- ถ้าปิดโหมดวิ่งเร็วอยู่
+			humanoid.WalkSpeed = WALK_DEFAULT                    -- ตั้งเป็นค่าปกติของ Roblox
+		end
 		humanoid.AutoRotate = not flyEnabled                      -- ถ้ากำลังบินอยู่ให้ปิดการหมั่นหน้าอัตโนมัติ
 	end
-	speedMode = false                                            -- รีเซ็ตสถานะวิ่งเร็วไม่ให้ค้างข้ามการเกิดใหม่
-	-- * NoClip/บิน ไม่รีเซ็ต เพราะเป็นสวิตช์ที่ผู้ใช้เปิดไว้ ตัวละครใหม่จะยังคงโหมดเดิม
+	-- * โหมดวิ่งเร็ว/NoClip/บิน ไม่รีเซ็ตเมื่อเกิดใหม่ เพราะเป็นสวิตช์ที่ผู้ใช้เปิดไว้
 	if refreshToggles then refreshToggles() end                  -- อัปเดตป้าย UI ให้ตรงกับสถานะใหม่
 end
 
@@ -191,12 +209,21 @@ end
 -- โหมดวิ่งเร็ว: เปิด = ตั้ง WalkSpeed เป็นค่าที่ผู้ใช้เลือก + รีเลือดเต็ม / ปิด = คืนค่าปกติ 16
 local function setSpeedMode(enabled)
 	speedMode = enabled                                          -- อัปเดตสถานะโหมดวิ่งเร็ว
-	if not humanoid then return end                             -- ยังไม่มี Humanoid → จบ
+	-- ถ้าตัวแปร humanoid ยังไม่มีค่า (หรือตัวละครเพิ่งตาย/เกิดใหม่) ให้ลองหาใหม่จากตัวละครปัจจุบัน
+	if not humanoid or not humanoid.Parent then
+		humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	end
+	if not humanoid then                                         -- ยังหา Humanoid ไม่เจอจริง ๆ
+		print("[DevUtilityV2] ยังไม่พบ Humanoid — ยังปรับความเร็วไม่ได้ (สถานะจำไว้ก่อน ลูป Heartbeat จะลองใหม่เอง)")
+		return                                                   -- จบ แต่ speedMode คงไว้ให้ลูป apply เองทีหลัง
+	end
 	if speedMode then                                            -- ถ้าเปิดโหมดวิ่งเร็ว
 		humanoid.WalkSpeed = walkSpeedValue                      -- ตั้งความเร็ววิ่งตามค่าที่เลือกในเมนู
 		humanoid.Health = humanoid.MaxHealth                     -- รีเลือดกลับมาเต็มหลอด
+		print("[DevUtilityV2] เปิดโหมดวิ่งเร็ว → WalkSpeed = " .. tostring(walkSpeedValue))
 	else                                                         -- ถ้าปิดโหมดวิ่งเร็ว
 		humanoid.WalkSpeed = WALK_DEFAULT                        -- คืนค่าความเร็วเป็นค่าปกติ 16
+		print("[DevUtilityV2] ปิดโหมดวิ่งเร็ว → WalkSpeed = " .. tostring(WALK_DEFAULT))
 	end
 end
 
@@ -239,6 +266,117 @@ local function setFly(enabled)
 				rootPart.CFrame = rootPart.CFrame + moveDirection.Unit * flySpeed * deltaTime -- ขยับตัวละครตามทิศทาง×ความเร็ว×เวลา
 			end
 		end)
+	end
+end
+
+-- ===================== ระบบ Aimbot / ล็อกเป้าหมาย (สำหรับทดสอบระบบเล็งในเกมของตัวเอง) =====================
+
+-- ตารางจุดเล็งที่เลือกได้ (วนด้วยปุ่มในเมนูแท็บ Aimbot)
+local AIM_PARTS = {
+	{ key = "Head", label = "ศีรษะ (Head)" },                      -- หัว (มีทั้ง R6 และ R15)
+	{ key = "UpperTorso", label = "ลำตัวบน (UpperTorso)" },        -- ลำตัวบน (ตัวละคร R15 เท่านั้น)
+	{ key = "HumanoidRootPart", label = "กลางลำตัว (HRP)" },       -- กลางลำตัว (มีทุกตัวละคร)
+}
+
+-- สแกนหาเป้าหมาย (Model ที่มี Humanoid ยังมีชีวิต) ทั่ว Workspace — เรียกซ้ำทุก 0.25 วินาที
+local function refreshAimCandidates()
+	aimCandidates = {}                                            -- ล้างรายการเป้าหมายเก่า
+	for _, inst in ipairs(workspace:GetDescendants()) do           -- วน Instance ทุกตัวใน Workspace
+		if inst:IsA("Model") then                                -- เฉพาะ Model เท่านั้น
+			local hum = inst:FindFirstChildOfClass("Humanoid")   -- หา Humanoid ที่อยู่ใน Model นี้
+			if hum and hum.Health > 0 and inst ~= character then -- มี Humanoid + ยังไม่ตาย + ไม่ใช่ตัวละครเราเอง
+				table.insert(aimCandidates, { model = inst, humanoid = hum }) -- เพิ่มเข้ารายการเป้าหมาย
+			end
+		end
+	end
+end
+
+-- หา Part ของเป้าหมายตามจุดเล็งที่ผู้ใช้เลือก (ถ้าไม่มีจุดนั้นให้ใช้ HumanoidRootPart แทน)
+local function getAimPart(model)
+	local wanted = AIM_PARTS[aimPartIndex].key                   -- ชื่อ Part ที่เลือกไว้ในเมนู
+	local part = model:FindFirstChild(wanted)                     -- ลองหาจุดที่เลือก
+	if part then return part end                                 -- เจอ → ใช้จุดนั้น
+	return model:FindFirstChild("HumanoidRootPart") or model:FindFirstChild("Head") -- ไม่เจอ → ใช้จุดสำรอง
+end
+
+-- คำนวณมุมกึ่งกลางของ FOV (องศา) ใช้ทั้งตอนเช็คเป้าและตอนวาดวงกลม
+local function halfFovDegrees()
+	return aimFov * 0.5                                          -- ครึ่งหนึ่งของค่า FOV ที่ตั้งไว้
+end
+
+-- วาดวงกลมแสดงขอบเขต Aimbot กลางจอ (อัปเดตเมื่อเปลี่ยนค่า FOV หรือตอนเปิด Aimbot)
+local function updateFovCircle()
+	if not fovCircle then return end                             -- ยังสร้าง GUI ไม่เสร็จ → ข้ามไปก่อน
+	local cam = workspace.CurrentCamera                          -- ดึงกล้องปัจจุบัน
+	local viewport = (cam and cam.ViewportSize) or Vector2.new(1920, 1080) -- ขนาดหน้าจอปัจจุบัน (มีค่าสำรองถ้าไม่มีกล้อง)
+	local verticalFov = (cam and cam.FieldOfView) or 70          -- มุมมองแนวตั้งของกล้อง (ค่าปกติของ Roblox คือ 70)
+	-- แปลงมุม FOV (องศา) เป็นเส้นผ่านศูนย์กลางวงกลมบนหน้าจอ (หน่วย Pixel)
+	local diameter = 2 * math.tan(math.rad(halfFovDegrees())) * (viewport.Y * 0.5) / math.tan(math.rad(verticalFov * 0.5))
+	diameter = math.floor(math.clamp(diameter, 20, 4000))        -- จำกัดขนาดไม่ให้เล็กหรือใหญ่เกินไป
+	fovCircle.Size = UDim2.new(0, diameter, 0, diameter)         -- ตั้งขนาดวงกลมตามค่าที่คำนวณได้
+	fovCircle.Position = UDim2.new(0.5, -diameter / 2, 0.5, -diameter / 2) -- วางกึ่งกลางหน้าจอพอดี
+end
+
+-- ฟังก์ชันหลักของ Aimbot (รันทุกเฟรม หลังกล้องอัปเดตแล้ว) — หาเป้าหมายในกรอบ FOV แล้วหมุนกล้องไปหาแบบนุ่มนวล
+local function aimbotStep()
+	local cam = workspace.CurrentCamera
+	if not (aimbotEnabled and cam) then return end              -- ปิดอยู่หรือไม่มีกล้อง → จบเฟรมนี้
+	local camCF = cam.CFrame                                     -- CFrame ของกล้องปัจจุบัน
+	local camPos = camCF.Position                                -- ตำแหน่งกล้องในโลก
+	local halfFovRad = math.rad(halfFovDegrees())                -- ครึ่ง FOV แปลงเป็นเรเดียน
+	local bestPart, bestAngle = nil, nil                         -- เป้าหมายที่ดีที่สุด (มุมแคบที่สุด)
+	local rayParams = RaycastParams.new()                        -- ตั้งค่า Raycast สำหรับเช็คการมองเห็น
+	rayParams.FilterType = Enum.RaycastFilterType.Exclude        -- โหมดยกเว้น Instance ที่ระบุ
+	rayParams.FilterDescendantsInstances = { character }         -- ไม่ให้ Ray โดนตัวละครของเราเอง
+	for _, cand in ipairs(aimCandidates) do                       -- วนเป้าหมายทั้งหมดที่สแกนไว้
+		local model = cand.model                                -- Model ของเป้าหมายตัวนี้
+		if model.Parent and cand.humanoid.Health > 0 then       -- ยังอยู่ในเกมและยังไม่ตาย
+			local part = getAimPart(model)                      -- Part จุดเล็งของเป้าหมายนี้
+			if part then
+				local toTarget = part.Position - camPos         -- ทิศทางจากกล้องไปยังเป้า
+				local distance = toTarget.Magnitude             -- ระยะทางเป็นหน่วยสตั๊ด
+				if distance > 0.5 and distance <= aimRange then -- อยู่ในระยะที่กำหนด (ไม่นับระยะใกล้กว่า 0.5)
+					local direction = toTarget / distance       -- ทิศทาง Normalize (ยาว 1)
+					local angle = math.acos(math.clamp(camCF.LookVector:Dot(direction), -1, 1)) -- มุมระหว่างสายตากับเป้า (เรเดียน)
+					if angle <= halfFovRad                       -- อยู่ในกรอบ FOV
+						and (bestAngle == nil or angle < bestAngle) then -- และมุมแคบกว่าเป้าหมายเดิม
+						local visible = true                     -- สมมติว่ามองเห็นก่อน
+						if aimVisibility then                   -- ถ้าเปิดโหมดมองเห็นเท่านั้น
+							local result = workspace:Raycast(camPos, toTarget, rayParams) -- ยิง Ray จากกล้องไปหาเป้า
+							if result then                      -- มีอะไรขวางทาง
+								visible = (result.Instance == part)                     -- โดนตัว Part เป้าเอง
+									or result.Instance:IsDescendantOf(model)            -- หรืออยู่ใน Model เป้า
+									or (result.Position - camPos).Magnitude >= distance - 1 -- หรือจุดที่โดนอยู่ไกลกว่าเป้า (อยู่หลังเป้า)
+							end
+						end
+						if visible then
+							bestPart, bestAngle = part, angle   -- จำเป้าหมายที่ดีที่สุดไว้
+						end
+					end
+				end
+			end
+		end
+	end
+	if bestPart then                                            -- เจอเป้าหมายที่จะเล็ง
+		local desiredCF = CFrame.lookAt(camPos, bestPart.Position, camCF.UpVector) -- CFrame ที่ต้องการ (กล้องหันไปหาเป้า)
+		local blend = math.clamp(aimSmooth / 100, 0.05, 1)      -- ค่าความไว (0.05 = นุ่มมาก, 1 = ตามทันที)
+		cam.CFrame = camCF:Lerp(desiredCF, blend)                -- หมุนกล้องไปหาเป้าแบบค่อย ๆ เลื่อน
+	end
+end
+
+-- เปิด/ปิด Aimbot: ผูก/ถอนลูปเล็งจาก RenderStep + แสดง/ซ่อนวงกลม FOV
+local function setAimbot(enabled)
+	aimbotEnabled = enabled                                     -- อัปเดตสถานะ Aimbot
+	if aimbotEnabled then
+		refreshAimCandidates()                                   -- สแกนเป้าหมายทันทีตอนเปิด
+		RunService:UnbindFromRenderStep(aimBindName)             -- กัน Bind ซ้ำ (ถ้าเคยผูกไว้แล้วให้ถอดก่อน)
+		-- BindToRenderStep ลำดับหลังกล้อง (Camera+1) เพื่อให้ทับการหมุนกล้องของเกมในเฟรมเดียวกัน
+		RunService:BindToRenderStep(aimBindName, Enum.RenderPriority.Camera.Value + 1, aimbotStep)
+		updateFovCircle()                                       -- คำนวณขนาดวงกลม FOV ตามค่าปัจจุบัน
+		if fovCircle then fovCircle.Visible = true end           -- แสดงวงกลม FOV กลางจอ
+	else
+		RunService:UnbindFromRenderStep(aimBindName)             -- ถอนลูปเล็งออก
+		if fovCircle then fovCircle.Visible = false end          -- ซ่อนวงกลม FOV
 	end
 end
 
@@ -462,6 +600,13 @@ local function applyBoostFPS()
 		particles = {},                                          -- ParticleEmitter ที่ปิด {instance, originalEnabled}
 		beams = {},                                              -- Beam ที่ปิด {instance, originalEnabled}
 		trails = {},                                             -- Trail ที่ปิด {instance, originalTransparency}
+		materials = {},                                          -- วัสดุเดิมของ Part ที่เปลี่ยนเป็น SmoothPlastic {instance, originalMaterial}
+		reflectances = {},                                       -- ค่าสะท้อนแสงเดิมที่ตั้งเป็น 0 {instance, originalReflectance}
+		surfaceAppearances = {},                                 -- SurfaceAppearance ที่ปิด {instance, originalEnabled}
+		textures = {},                                           -- Texture/Decal ที่ล้างรูป {instance, originalTexture}
+		legacyEffects = {},                                      -- Fire/Smoke/Sparkles ที่ปิด {instance, originalEnabled}
+		envSpecular = Lighting.EnvironmentSpecularScale,         -- ค่าสะท้อนสภาพแวดล้อมเดิม
+		envDiffuse = Lighting.EnvironmentDiffuseScale,           -- ค่ากระจายแสงสภาพแวดล้อมเดิม
 	}
 	-- 1) ลดคุณภาพการเรนเดอร์ของเกม (วิธีเดียวที่ทำได้จากฝั่ง Client)
 	pcall(function()                                             -- ครอบด้วย pcall กันสคริปต์ค้างถ้า API เปลี่ยน
@@ -485,6 +630,8 @@ local function applyBoostFPS()
 	end
 	Lighting.FogStart = 0                                        -- กำหนด FogStart = 0
 	Lighting.FogEnd = 100000000                                  -- ดัน FogEnd ให้ไกลมาก → หมอกจางหาย มองเห็นชัดสุด (Fog คือระบบหมอกแบบเก่า)
+	Lighting.EnvironmentSpecularScale = 0                        -- ปิดการสะท้อนสภาพแวดล้อม (ผิวดูแบนแบบดินน้ำมัน)
+	Lighting.EnvironmentDiffuseScale = 0                         -- ปิดการกระจายแสงสภาพแวดล้อม (ผิวดูแบนสม่ำเสมอ)
 	-- 3) ปิดอนุภาค/ลำแสง/ทางวิ่งทั่ว Workspace (ยกเว้นส่วนที่อยู่ในตัวละครของเรา)
 	for _, inst in ipairs(workspace:GetDescendants()) do          -- วน Instance ทุกตัวใน Workspace
 		if not (character and inst:IsDescendantOf(character)) then -- ข้ามส่วนของตัวละครตัวเอง
@@ -497,14 +644,34 @@ local function applyBoostFPS()
 			elseif inst:IsA("Trail") then                         -- ทางวิ่งท้ายตัวละคร/อาวุธ
 				table.insert(backup.trails, { instance = inst, originalTransparency = inst.Transparency }) -- เก็บค่าเดิม
 				inst.Transparency = NumberSequence.new(1)         -- ทำให้ Trail โปร่งใสสนิท (มองไม่เห็น)
+			elseif inst:IsA("BasePart") and not inst:IsA("Terrain") then -- ส่วนดินน้ำมัน: เปลี่ยนวัสดุทุก Part (ไม่แตะ Terrain เพราะตั้งเป็น SmoothPlastic ไม่ได้)
+				if inst.Material ~= Enum.Material.SmoothPlastic then -- ถ้ายังไม่ใช่ SmoothPlastic
+					table.insert(backup.materials, { instance = inst, originalMaterial = inst.Material }) -- เก็บวัสดุเดิม
+					inst.Material = Enum.Material.SmoothPlastic   -- เปลี่ยนเป็นผิวเรียบแบนแบบดินน้ำมัน
+				end
+				if inst.Reflectance > 0 then                       -- ถ้า Part มีค่าสะท้อนแสง
+					table.insert(backup.reflectances, { instance = inst, originalReflectance = inst.Reflectance }) -- เก็บค่าเดิม
+					inst.Reflectance = 0                          -- ปิดการสะท้อน → ผิวแบนสนิท
+				end
+			elseif inst:IsA("SurfaceAppearance") then             -- พื้นผิว PBR แบบคมชัด → ปิดให้ผิวแบน
+				table.insert(backup.surfaceAppearances, { instance = inst, originalEnabled = inst.Enabled }) -- เก็บค่าเดิม
+				inst.Enabled = false                              -- ปิดพื้นผิว PBR
+			elseif inst:IsA("Texture") or inst:IsA("Decal") then  -- เท็กซ์เจอร์/สติ๊กเกอร์ตกแต่ง → ล้างรูปออก
+				table.insert(backup.textures, { instance = inst, originalTexture = inst.Texture }) -- เก็บชื่อรูปเดิม
+				inst.Texture = ""                                 -- ล้างรูปเท็กซ์เจอร์ (ผิวเปลือยเปล่า)
+			elseif inst:IsA("Fire") or inst:IsA("Smoke") or inst:IsA("Sparkles") then -- เอฟเฟกโบราณ (ไฟ/ควัน/ประกาย) → ปิด
+				table.insert(backup.legacyEffects, { instance = inst, originalEnabled = inst.Enabled }) -- เก็บค่าเดิม
+				inst.Enabled = false                              -- ปิดเอฟเฟกตัวนี้
 			end
 		end
 	end
 	boostBackup = backup                                         -- บันทึกว่า Boost เปิดอยู่ + เก็บค่าเดิมไว้คืน
 	-- คืนข้อความสรุปผลที่ทำทั้งหมด เพื่อแสดงบน GUI
 	return string.format(                                        -- ต่อข้อความสรุป
-		"เปิด Boost FPS แล้ว\nปิด PostEffect %d ชิ้น | ParticleEmitter %d ตัว | Beam %d ชิ้น | Trail %d เส้น\nลด QualityLevel และล้างหมอก (Atmosphere/Fog) เรียบร้อย",
-		#backup.effects, #backup.particles, #backup.beams, #backup.trails -- จำนวนที่ปิดจริงในรอบนี้
+		"เปิด Boost FPS (ดินน้ำมัน) แล้ว\nเปลี่ยนวัสดุ SmoothPlastic %d ชิ้น | ปิดผิว/เท็กซ์เจอร์/เอฟเฟกเก่า %d ชิ้น\nปิด PostEffect %d | Particle %d | Beam %d | Trail %d\nลด QualityLevel + ล้างหมอก + ปิดการสะท้อน เรียบร้อย",
+		#backup.materials,                                        -- จำนวน Part ที่เปลี่ยนวัสดุเป็นดินน้ำมัน
+		#backup.surfaceAppearances + #backup.textures + #backup.legacyEffects, -- จำนวนพื้นผิว/เท็กซ์เจอร์/เอฟเฟกโบราณที่ปิด
+		#backup.effects, #backup.particles, #backup.beams, #backup.trails -- จำนวนเอฟเฟกอื่นที่ปิด
 	)
 end
 
@@ -535,6 +702,23 @@ local function restoreBoostFPS()
 	for _, item in ipairs(b.trails) do                           -- วน Trail ที่เคยปิดไว้
 		if item.instance.Parent then item.instance.Transparency = item.originalTransparency end -- คืนค่าความโปร่งใสเดิม
 	end
+	for _, item in ipairs(b.materials) do                        -- วน Part ที่เคยเปลี่ยนเป็นดินน้ำมัน
+		if item.instance.Parent then item.instance.Material = item.originalMaterial end -- คืนวัสดุเดิมทุกชิ้น
+	end
+	for _, item in ipairs(b.reflectances) do                     -- วน Part ที่เคยปิดการสะท้อน
+		if item.instance.Parent then item.instance.Reflectance = item.originalReflectance end -- คืนค่าสะท้อนแสงเดิม
+	end
+	for _, item in ipairs(b.surfaceAppearances) do               -- วน SurfaceAppearance ที่เคยปิด
+		if item.instance.Parent then item.instance.Enabled = item.originalEnabled end -- คืนสถานะเดิม
+	end
+	for _, item in ipairs(b.textures) do                         -- วน Texture/Decal ที่เคยล้างรูป
+		if item.instance.Parent then item.instance.Texture = item.originalTexture end -- คืนรูปเท็กซ์เจอร์เดิม
+	end
+	for _, item in ipairs(b.legacyEffects) do                    -- วน Fire/Smoke/Sparkles ที่เคยปิด
+		if item.instance.Parent then item.instance.Enabled = item.originalEnabled end -- คืนสถานะเดิม
+	end
+	Lighting.EnvironmentSpecularScale = b.envSpecular            -- คืนค่าสะท้อนสภาพแวดล้อมเดิม
+	Lighting.EnvironmentDiffuseScale = b.envDiffuse              -- คืนค่ากระจายแสงสภาพแวดล้อมเดิม
 	boostBackup = nil                                            -- เคลียร์สถานะ Boost
 	return "คืนสภาพกราฟฟิกเดิมเรียบร้อยแล้ว"                     -- คืนข้อความยืนยัน
 end
@@ -556,15 +740,16 @@ end
 
 -- ===================== ส่วนสร้าง GUI เมนูภาษาไทย =====================
 
--- สีธีมของเมนู (โทนมืดเข้ม ตัดด้วยสีเขียวอมฟ้า)
-local COLOR_WINDOW = Color3.fromRGB(24, 26, 34)                 -- สีพื้นหน้าต่างหลัก
-local COLOR_BAR = Color3.fromRGB(32, 35, 46)                    -- สีแถบหัวเรื่อง/พื้นลิสต์
-local COLOR_BTN = Color3.fromRGB(45, 50, 64)                    -- สีปุ่มปกติ
-local COLOR_BTN_HOVER = Color3.fromRGB(62, 68, 86)              -- สีปุ่มตอนเอาเมาส์ไปวาง
-local COLOR_ACCENT = Color3.fromRGB(0, 200, 170)                -- สีเน้น (ปุ่มเปิด/แท็บที่เลือก)
-local COLOR_TEXT = Color3.fromRGB(232, 236, 245)                -- สีตัวอักษรหลัก
-local COLOR_DIM = Color3.fromRGB(150, 156, 172)                 -- สีตัวอักษรองค์ประกอบ/คำอธิบาย
-local COLOR_DARK = Color3.fromRGB(18, 20, 26)                   -- สีตัวอักษรบนพื้นสีเน้น
+-- สีธีมของเมนู (โทนม่วง-ฟ้าไซเบอร์: พื้นเข้มอมม่วง ตัดด้วยแอ็กเซนต์ม่วงเรืองแสงและฟ้านีออน)
+local COLOR_WINDOW = Color3.fromRGB(16, 15, 30)                 -- สีพื้นหน้าต่างหลัก (กรมท่าม่วงเข้ม)
+local COLOR_BAR = Color3.fromRGB(28, 22, 52)                    -- สีแถบหัวเรื่อง/พื้นลิสต์ (ม่วงเข้ม)
+local COLOR_BTN = Color3.fromRGB(40, 34, 68)                    -- สีปุ่มปกติ (ม่วงเทา)
+local COLOR_BTN_HOVER = Color3.fromRGB(58, 48, 96)              -- สีปุ่มตอนเอาเมาส์ไปวาง (ม่วงสว่างขึ้น)
+local COLOR_ACCENT = Color3.fromRGB(138, 92, 245)               -- สีเน้นหลัก (ม่วงเรืองแสง — ปุ่มเปิด/แท็บที่เลือก)
+local COLOR_ACCENT2 = Color3.fromRGB(0, 210, 255)               -- สีเน้นรอง (ฟ้าไซเบอร์ — เกรเดียนต์/วงกลม FOV)
+local COLOR_TEXT = Color3.fromRGB(238, 236, 255)                -- สีตัวอักษรหลัก (ขาวอมม่วง)
+local COLOR_DIM = Color3.fromRGB(156, 150, 190)                 -- สีตัวอักษรองค์ประกอบ (เทาม่วง)
+local COLOR_DARK = Color3.fromRGB(14, 10, 28)                   -- สีตัวอักษรบนพื้นสีเน้น
 local FONT = Enum.Font.GothamMedium                             -- ฟอนต์ที่ใช้ทั้งเมนู
 
 -- ฟังก์ชันช่วย: ใส่มุมโค้ง (UICorner) ให้ Instance ใดก็ได้
@@ -643,6 +828,91 @@ local function makeLabel(text, parent, size, position, textColor, textSize)
 	return label                                                 -- คืนป้ายไว้อัปเดตภายหลัง
 end
 
+-- ฟังก์ชันช่วย: สร้างสไลเดอร์ (แถบให้ลากจุดกลมเลื่อนปรับค่า) พร้อมป้ายชื่อ + ค่าปัจจุบัน
+local function makeSlider(parent, containerY, labelText, minValue, maxValue, initialValue, onChange)
+	local value = initialValue                                        -- ค่าปัจจุบันของสไลเดอร์
+	local fraction = (initialValue - minValue) / (maxValue - minValue) -- ตำแหน่งหัวสไลเดอร์เป็นสัดส่วน 0-1
+
+	local container = Instance.new("Frame")                         -- กรอบรวมป้าย + แถบสไลเดอร์
+	container.Size = UDim2.new(1, 0, 0, 44)                         -- กว้างเต็มความกว้าง สูง 44px
+	container.Position = UDim2.new(0, 0, 0, containerY)             -- ตำแหน่งแนวตั้งที่ส่งเข้ามา
+	container.BackgroundTransparency = 1                            -- ไม่มีพื้นหลัง
+	container.Parent = parent                                       -- ใส่เข้าแท็บตัวละคร
+
+	local caption = Instance.new("TextLabel")                       -- ป้ายชื่อ + ค่าปัจจุบัน (เช่น "ความเร็ววิ่ง: 50")
+	caption.Size = UDim2.new(1, 0, 0, 18)                           -- สูง 18px
+	caption.BackgroundTransparency = 1                              -- ไม่มีพื้นหลัง
+	caption.Font = FONT                                             -- ฟอนต์เดียวกับเมนู
+	caption.TextSize = 13                                           -- ขนาดตัวอักษร
+	caption.TextColor3 = COLOR_TEXT                                 -- สีตัวอักษร
+	caption.TextXAlignment = Enum.TextXAlignment.Left               -- ชิดซ้าย
+	caption.Text = labelText .. ": " .. value                       -- ข้อความเริ่มต้น
+	caption.Parent = container                                      -- ใส่เข้ากรอบ
+
+	local track = Instance.new("Frame")                             -- แถบรางสไลเดอร์
+	track.Size = UDim2.new(1, 0, 0, 8)                              -- เต็มความกว้าง สูง 8px
+	track.Position = UDim2.new(0, 0, 0, 30)                         -- อยู่ใต้ป้าย
+	track.BackgroundColor3 = COLOR_BTN                              -- สีพื้นราง
+	track.BorderSizePixel = 0                                       -- ปิดเส้นขอบ
+	track.Parent = container                                        -- ใส่เข้ากรอบ
+	addCorner(track, 4)                                             -- ทำมุมโค้งราง
+
+	local fill = Instance.new("Frame")                              -- ส่วนซ้ายของราง (สีเน้น บอกว่าปรับไปถึงไหน)
+	fill.Size = UDim2.new(fraction, 0, 1, 0)                         -- ความยาวตามสัดส่วนค่าปัจจุบัน
+	fill.BackgroundColor3 = COLOR_ACCENT                            -- สีเน้น
+	fill.BorderSizePixel = 0                                        -- ปิดเส้นขอบ
+	fill.Parent = track                                             -- ใส่เข้าราง
+	addCorner(fill, 4)                                              -- ทำมุมโค้ง
+
+	local knob = Instance.new("TextButton")                         -- หัวสไลเดอร์ (จุดกลมที่ใช้ลาก)
+	knob.Size = UDim2.new(0, 18, 0, 18)                             -- ขนาด 18x18 px
+	knob.Position = UDim2.new(fraction, -9, 0.5, -9)                 -- วางตามสัดส่วน กึ่งกลางแนวตั้ง
+	knob.BackgroundColor3 = COLOR_TEXT                              -- สีจุดกลม (ตัดกับราง)
+	knob.Text = ""                                                  -- ไม่มีข้อความ
+	knob.AutoButtonColor = false                                    -- ปิดเอฟเฟกต์กดของ Roblox
+	knob.Parent = track                                             -- ใส่เข้าราง (เป็นลูกของราง เพื่อเลื่อนตามราง)
+	addCorner(knob, 9)                                              -- ทำมุมโค้งเต็ม (เป็นวงกลม)
+
+	local isDragging = false                                        -- สถานะว่ากำลังลากหัวสไลเดอร์อยู่หรือไม่
+
+	-- ตั้งค่าจากสัดส่วน 0-1 (ใช้ทั้งตอนลากและตอนตั้งค่าเริ่มต้น)
+	local function setFromFraction(newFraction)
+		fraction = math.clamp(newFraction, 0, 1)                     -- จำกัดไม่ให้หลุดขอบราง
+		value = math.floor(minValue + (maxValue - minValue) * fraction + 0.5) -- แปลงเป็นจำนวนเต็มในช่วง min-max
+		fill.Size = UDim2.new(fraction, 0, 1, 0)                     -- ขยายแถบสีเน้นตามสัดส่วน
+		knob.Position = UDim2.new(fraction, -9, 0.5, -9)             -- เลื่อนหัวสไลเดอร์ตามสัดส่วน
+		caption.Text = labelText .. ": " .. value                    -- อัปเดตตัวเลขบนป้าย
+		if onChange then onChange(value) end                         -- แจ้งค่าใหม่ให้ระบบข้างนอก (ใช้กับ WalkSpeed ทันที)
+	end
+
+	-- แปลงตำแหน่งเมาส์บนหน้าจอเป็นสัดส่วนบนแถบราง
+	local function fractionFromInput(input)
+		local trackWidth = math.max(track.AbsoluteSize.X, 1)         -- ความกว้างรางปัจจุบัน (กันหารศูนย์)
+		return (input.Position.X - track.AbsolutePosition.X) / trackWidth -- ระยะจากขอบซ้ายราง ÷ ความกว้างราง
+	end
+
+	knob.MouseButton1Down:Connect(function() isDragging = true end) -- เริ่มลากเมื่อกดที่หัวสไลเดอร์
+	track.InputBegan:Connect(function(input)                        -- คลิกที่ราง → กระโดดค่าไปตำแหน่งที่คลิก + เริ่มลาก
+		if input.UserInputType == Enum.UserInputType.MouseButton1 then
+			isDragging = true
+			setFromFraction(fractionFromInput(input))
+		end
+	end)
+	UserInputService.InputChanged:Connect(function(input)           -- ทุกครั้งที่ input เปลี่ยน (เมาส์ขยับ)
+		if isDragging and input.UserInputType == Enum.UserInputType.MouseMovement then
+			setFromFraction(fractionFromInput(input))               -- ปรับค่าตามตำแหน่งเมาส์ปัจจุบัน
+		end
+	end)
+	UserInputService.InputEnded:Connect(function(input)             -- ปล่อยคลิก → หยุดลาก
+		if input.UserInputType == Enum.UserInputType.MouseButton1 then
+			isDragging = false
+		end
+	end)
+
+	setFromFraction(fraction)                                      -- ตั้งค่าเริ่มต้นให้ตรงกับค่าที่ส่งเข้ามา
+	return { caption = caption, setFromFraction = setFromFraction } -- คืน object ไว้ให้ UI ส่วนอื่นอัปเดตป้ายได้
+end
+
 -- สร้าง ScreenGui หลักของเมนู
 local screenGui = Instance.new("ScreenGui")                     -- สร้าง ScreenGui
 screenGui.Name = "DevUtilitySuiteV2"                            -- ตั้งชื่อ
@@ -665,30 +935,68 @@ menuToggleButton.AutoButtonColor = false                        -- ปิดเ�
 addCorner(menuToggleButton, 10)                                 -- ทำมุมโค้ง
 menuToggleButton.Parent = screenGui                             -- ใส่เข้า ScreenGui
 
+-- วงกลมแสดงขอบเขต Aimbot (FOV) ตรงกึ่งกลางจอ — แสดงเฉพาะตอนเปิด Aimbot เท่านั้น
+fovCircle = Instance.new("Frame")                               -- สร้าง Frame (จะทำให้เป็นวงกลมด้วย UICorner)
+fovCircle.Name = "AimbotFovCircle"                              -- ตั้งชื่ออ้างอิง
+fovCircle.BackgroundTransparency = 1                            -- ไม่มีพื้นหลัง (เห็นแค่เส้นขอบ)
+fovCircle.BorderSizePixel = 0                                   -- ปิดเส้นขอบมาตรฐาน
+fovCircle.Visible = false                                       -- เริ่มต้นซ่อนไว้ (Aimbot ปิดอยู่)
+local fovCorner = Instance.new("UICorner")                      -- ทำมุมโค้งเต็ม → รูปทรงเป็นวงกลม
+fovCorner.CornerRadius = UDim.new(1, 0)                         -- รัศมี 50% ของขนาด = วงกลมพอดี
+fovCorner.Parent = fovCircle                                    -- ผูกกับ Frame
+local fovStroke = Instance.new("UIStroke")                      -- เส้นขอบวงกลม
+fovStroke.Color = COLOR_ACCENT2                                -- สีฟ้าไซเบอร์ (นีออนเด่นกลางจอ)
+fovStroke.Thickness = 2                                         -- ความหนาเส้น 2px
+fovStroke.Transparency = 0.4                                    -- โปร่งแสงเล็กน้อย
+fovStroke.Parent = fovCircle                                    -- ผูกกับ Frame
+fovCircle.Parent = screenGui                                    -- ใส่เข้า ScreenGui (แสดงกลางจอทับได้ทุกแท็บ)
+
 -- หน้าต่างเมนูหลัก (วางกึ่งกลางจอ)
 local mainWindow = Instance.new("Frame")                        -- สร้าง Frame หน้าต่างหลัก
 mainWindow.Name = "MainWindow"                                  -- ตั้งชื่อ
 mainWindow.Size = UDim2.new(0, 500, 0, 430)                     -- ขนาด 500x430 px
 mainWindow.Position = UDim2.new(0.5, -250, 0.5, -215)           -- กึ่งกลางจอ
-mainWindow.BackgroundColor3 = COLOR_WINDOW                      -- สีพื้นหน้าต่าง
+mainWindow.BackgroundColor3 = Color3.fromRGB(255, 255, 255)     -- พื้นสีขาว (UIGradient คูณสี ให้สีจริงจากเกรเดียนต์ด้านล่าง)
 mainWindow.BorderSizePixel = 0                                  -- ปิดเส้นขอบ
 mainWindow.Active = true                                        -- เปิดใช้งาน input เพื่อรองรับการลาก
 addCorner(mainWindow, 10)                                       -- ทำมุมโค้ง
 mainWindow.Parent = screenGui                                   -- ใส่เข้า ScreenGui
 
+-- เกรเดียนต์โทนม่วง-ฟ้าไซเบอร์ + ขอบเรืองแสง ให้หน้าต่างดูเท่แบบ script hub
+local windowGradient = Instance.new("UIGradient")               -- เกรเดียนต์ไล่เฉดบนพื้นหน้าต่าง
+windowGradient.Color = ColorSequence.new({                      -- ไล่จากกรมท่าม่วง (มุมบนซ้าย) ไปกรมท่าฟ้า (มุมล่างขวา)
+	ColorSequenceKeypoint.new(0, Color3.fromRGB(26, 20, 52)),
+	ColorSequenceKeypoint.new(1, Color3.fromRGB(13, 18, 36)),
+})
+windowGradient.Rotation = 45                                    -- วางเฉนแบบทแยง 45 องศา
+windowGradient.Parent = mainWindow                              -- ผูกกับหน้าต่างหลัก
+local windowStroke = Instance.new("UIStroke")                   -- ขอบบาง ๆ รอบหน้าต่าง
+windowStroke.Color = COLOR_ACCENT                               -- สีม่วงเรืองแสงตามธีม
+windowStroke.Thickness = 1.5                                    -- ความหนาเส้น 1.5px
+windowStroke.Transparency = 0.35                                -- โปร่งแสงเล็กน้อย ไม่แยงตา
+windowStroke.Parent = mainWindow                                -- ผูกกับหน้าต่างหลัก
+
 -- แถบหัวเรื่อง (ไว้แสดงชื่อ + ปุ่มปิด + ใช้ลากหน้าต่าง)
 local titleBar = Instance.new("Frame")                          -- สร้างแถบหัวเรื่อง
 titleBar.Size = UDim2.new(1, 0, 0, 40)                          -- เต็มความกว้าง สูง 40px
-titleBar.BackgroundColor3 = COLOR_BAR                           -- สีพื้นแถบ
+titleBar.BackgroundColor3 = Color3.fromRGB(255, 255, 255)       -- พื้นสีขาว (สีจริงมาจากเกรเดียนต์ม่วง→ฟ้าด้านล่าง)
 titleBar.BorderSizePixel = 0                                    -- ปิดเส้นขอบ
 titleBar.Parent = mainWindow                                    -- ใส่เข้าหน้าต่างหลัก
 addCorner(titleBar, 10)                                         -- ทำมุมโค้ง (รวมมุมล่างด้วย)
 local titleCover = Instance.new("Frame")                        -- แถบปิดมุมโค้งด้านล่าง ให้ต่อกับตัวหน้าต่างเนียน
 titleCover.Size = UDim2.new(1, 0, 0, 12)                        -- สูง 12px ครอบมุมโค้งล่าง
 titleCover.Position = UDim2.new(0, 0, 1, -12)                   -- วางชิดขอบล่างของแถบ
-titleCover.BackgroundColor3 = COLOR_BAR                         -- สีเดียวกับแถบ
+titleCover.BackgroundColor3 = Color3.fromRGB(255, 255, 255)     -- พื้นสีขาว (คู่กับเกรเดียนต์ด้านล่าง ให้ต่อเนียน)
 titleCover.BorderSizePixel = 0                                  -- ปิดเส้นขอบ
 titleCover.Parent = titleBar                                    -- ใส่เข้าแถบหัวเรื่อง
+
+-- เกรเดียนต์ม่วง → ฟ้า แนวนอน ให้แถบหัวเรื่องดูมีโทน (ทั้งสอง Frame ใช้ค่าเดียวกันเพื่อต่อเนียน)
+local barGradient = Instance.new("UIGradient")                  -- เกรเดียนต์ของแถบหัวเรื่อง
+barGradient.Color = ColorSequence.new(COLOR_ACCENT, COLOR_ACCENT2) -- ไล่จากม่วงเรืองแสงไปฟ้าไซเบอร์
+barGradient.Parent = titleBar                                   -- ผูกกับแถบหัวเรื่อง
+local coverGradient = Instance.new("UIGradient")                -- เกรเดียนต์ของแถบปิดมุมล่าง (ค่าเดียวกัน)
+coverGradient.Color = ColorSequence.new(COLOR_ACCENT, COLOR_ACCENT2) -- ไล่สีเดียวกับแถบหลักเพื่อต่อเนียน
+coverGradient.Parent = titleCover                                -- ผูกกับแถบปิดมุม
 
 local titleLabel = Instance.new("TextLabel")                    -- ป้ายชื่อโปรแกรม
 titleLabel.Size = UDim2.new(1, -100, 1, 0)                      -- เว้นที่ให้ปุ่มปิดด้านขวา
@@ -698,7 +1006,7 @@ titleLabel.Font = FONT                                          -- ฟอนต�
 titleLabel.TextSize = 16                                        -- ขนาดตัวอักษร
 titleLabel.TextColor3 = COLOR_TEXT                              -- สีตัวอักษร
 titleLabel.TextXAlignment = Enum.TextXAlignment.Left            -- ชิดซ้าย
-titleLabel.Text = "Dev Utility Suite V2 (Dev Menu)"             -- ข้อความหัวเรื่อง
+titleLabel.Text = "⚡ Dev Utility Suite V2 | Dev Menu"            -- ข้อความหัวเรื่อง (มีไอคอนสายฟ้านำหน้า)
 titleLabel.Parent = titleBar                                    -- ใส่เข้าแถบหัวเรื่อง
 
 local closeButton = Instance.new("TextButton")                  -- ปุ่มปิดเมนู (✕)
@@ -713,7 +1021,7 @@ closeButton.AutoButtonColor = false                             -- ปิดเ�
 addCorner(closeButton, 6)                                       -- ทำมุมโค้ง
 closeButton.Parent = titleBar                                   -- ใส่เข้าแถบหัวเรื่อง
 
--- แถบแท็บ (4 แท็บเรียงแนวนอน)
+-- แถบแท็บ (5 แท็บเรียงแนวนอน)
 local tabBar = Instance.new("Frame")                            -- สร้าง Frame แถบแท็บ
 tabBar.Size = UDim2.new(1, -12, 0, 36)                          -- กว้างเท่าหน้าต่าง - 12px สูง 36px
 tabBar.Position = UDim2.new(0, 6, 0, 44)                        -- ใต้แถบหัวเรื่อง
@@ -734,7 +1042,7 @@ contentFrame.Position = UDim2.new(0, 8, 0, 84)                  -- ใต้แ�
 contentFrame.BackgroundTransparency = 1                         -- ไม่มีพื้นหลัง
 contentFrame.Parent = mainWindow                                -- ใส่เข้าหน้าต่างหลัก
 
-local tabNames = { "หน้าหลัก", "ตัวละคร", "สร้างของ & วาร์ป", "ประสิทธิภาพ" } -- ชื่อแท็บทั้ง 4
+local tabNames = { "🏠 หน้าหลัก", "🎭 ตัวละคร", "🧭 สร้าง/วาร์ป", "🎯 Aimbot", "⚡ ประสิทธิภาพ" } -- ชื่อแท็บทั้ง 5 (มีไอคอนอีโมจินำหน้า)
 local tabButtons = {}                                           -- เก็บปุ่มแท็บทั้งหมด
 local tabFrames = {}                                            -- เก็บ Frame เนื้อหาของแต่ละแท็บ
 local currentTab = 1                                            -- แท็บที่เปิดอยู่ปัจจุบัน
@@ -751,15 +1059,15 @@ local function switchTab(index)
 	end
 end
 
--- สร้างปุ่มแท็บ + Frame เนื้อหา ครบทั้ง 4 แท็บ
+-- สร้างปุ่มแท็บ + Frame เนื้อหา ครบทั้ง 5 แท็บ
 for index, name in ipairs(tabNames) do                          -- วนชื่อแท็บทั้งหมด
 	local tabIndex = index                                      -- คัดลอกค่าลำดับไว้ในตัวแปรท้องถิ่น (กัน closure จับค่าผิด)
 	local tabButton = Instance.new("TextButton")                -- สร้างปุ่มแท็บ
-	tabButton.Size = UDim2.new(0, 118, 1, 0)                    -- กว้าง 118px เต็มความสูงแถบ
+	tabButton.Size = UDim2.new(0, 94, 1, 0)                     -- กว้าง 94px เต็มความสูงแถบ (5 แท็บ × 94 + ช่องว่าง 4×4 = 486 พอดีแถบ)
 	tabButton.BackgroundColor3 = COLOR_BTN                      -- สีพื้นปกติ
 	tabButton.TextColor3 = COLOR_TEXT                           -- สีตัวอักษร
 	tabButton.Font = FONT                                       -- ฟอนต์
-	tabButton.TextSize = 13                                     -- ขนาดตัวอักษร
+	tabButton.TextSize = 12                                     -- ขนาดตัวอักษร (12 พอให้ไอคอน+ชื่อแท็บยาวสุดพอดีความกว้าง 94px)
 	tabButton.Text = name                                       -- ชื่อแท็บ
 	tabButton.AutoButtonColor = false                           -- ปิดเอฟเฟกต์กดของ Roblox
 	addCorner(tabButton, 6)                                     -- ทำมุมโค้ง
@@ -780,57 +1088,48 @@ local homeTab = tabFrames[1]                                   -- อ้าง�
 ui.posLabel = makeLabel("พิกัดตัวละคร: (ยังไม่มีตัวละคร)", homeTab, UDim2.new(1, 0, 0, 26), UDim2.new(0, 4, 0, 8))            -- ป้ายพิกัดตัวละครแบบเรียลไทม์
 ui.fpsLabel = makeLabel("FPS: -- | Ping: -- ms", homeTab, UDim2.new(1, 0, 0, 26), UDim2.new(0, 4, 0, 38))                      -- ป้าย FPS/Ping
 ui.timeLabel = makeLabel("เวลาที่เปิดใช้งาน: 00:00:00", homeTab, UDim2.new(1, 0, 0, 26), UDim2.new(0, 4, 0, 68))              -- ป้ายเวลาที่เปิดใช้งาน
-ui.statusLabel = makeLabel(statusString(), homeTab, UDim2.new(1, 0, 0, 26), UDim2.new(0, 4, 0, 98))                            -- ป้ายสถานะโหมดต่าง ๆ
-makeLabel("คีย์ลัดที่เหลือ: B = เสก Part ทดสอบ | T = วาร์ปไปจุดที่เมาส์ | F3 = วิ่งเร็ว", homeTab, UDim2.new(1, 0, 0, 40), UDim2.new(0, 4, 0, 140), COLOR_DIM, 13) -- คำอธิบายคีย์ลัด
-makeLabel("วิธีใช้: ปุ่ม ☰ เปิดเมนู / ปุ่ม ✕ ปิดเมนู | ลากแถบชื่อด้านบนเพื่อย้ายหน้าต่าง | ทุกฟังก์ชันสั่งได้จากปุ่มในเมนู", homeTab, UDim2.new(1, 0, 0, 60), UDim2.new(0, 4, 0, 186), COLOR_DIM, 13) -- คำอธิบายการใช้งาน
+ui.statusLabel = makeLabel(statusString(), homeTab, UDim2.new(1, 0, 0, 40), UDim2.new(0, 4, 0, 98))                            -- ป้ายสถานะโหมดต่าง ๆ (สูง 40px เพื่อให้ข้อความยาวไม่ถูกตัด)
+makeLabel("🎮 คีย์ลัดที่เหลือ: B = เสก Part ทดสอบ | T = วาร์ปไปจุดที่เมาส์ | F3 = วิ่งเร็ว", homeTab, UDim2.new(1, 0, 0, 40), UDim2.new(0, 4, 0, 140), COLOR_DIM, 13) -- คำอธิบายคีย์ลัด
+makeLabel("💡 วิธีใช้: ปุ่ม ☰ เปิดเมนู / ปุ่ม ✕ ปิดเมนู | ลากแถบชื่อด้านบนเพื่อย้ายหน้าต่าง | ทุกฟังก์ชันสั่งได้จากปุ่มในเมนู", homeTab, UDim2.new(1, 0, 0, 60), UDim2.new(0, 4, 0, 186), COLOR_DIM, 13) -- คำอธิบายการใช้งาน
 
 -- ===================== เนื้อหาแท็บ 2: ตัวละคร =====================
 local charTab = tabFrames[2]                                   -- อ้างอิง Frame ของแท็บตัวละคร
 local halfBtnSize = UDim2.new(0.5, -6, 0, 38)                  -- ขนาดปุ่มครึ่งความกว้าง
-makeToggleButton("โหมดวิ่งเร็ว", charTab, halfBtnSize, UDim2.new(0, 0, 0, 8),        -- ปุ่ม toggle วิ่งเร็ว
+makeToggleButton("🏃 โหมดวิ่งเร็ว", charTab, halfBtnSize, UDim2.new(0, 0, 0, 8),        -- ปุ่ม toggle วิ่งเร็ว
 	function() return speedMode end,                            -- เช็คสถานะ: speedMode
 	function() setSpeedMode(not speedMode) end)                 -- กดแล้ว: สลับสถานะวิ่งเร็ว
-makeToggleButton("NoClip (ทะลุกำแพง)", charTab, halfBtnSize, UDim2.new(0.5, 6, 0, 8), -- ปุ่ม toggle NoClip
+makeToggleButton("👻 NoClip (ทะลุกำแพง)", charTab, halfBtnSize, UDim2.new(0.5, 6, 0, 8), -- ปุ่ม toggle NoClip
 	function() return noClipEnabled end,                        -- เช็คสถานะ: noClipEnabled
 	function() setNoClip(not noClipEnabled) end)                -- กดแล้ว: สลับสถานะ NoClip
-makeToggleButton("โหมดบิน (WASD+Space/Ctrl)", charTab, halfBtnSize, UDim2.new(0, 0, 0, 52), -- ปุ่ม toggle บิน
+makeToggleButton("🚀 โหมดบิน (WASD)", charTab, halfBtnSize, UDim2.new(0, 0, 0, 52), -- ปุ่ม toggle บิน (สั้นลงให้พอดีคอลัมน์ — Space/Ctrl ดูได้จากคำอธิบายด้านล่าง)
 	function() return flyEnabled end,                           -- เช็คสถานะ: flyEnabled
 	function() setFly(not flyEnabled) end)                      -- กดแล้ว: สลับสถานะบิน
-makeButton("รีเลือดเต็ม", charTab, halfBtnSize, UDim2.new(0.5, 6, 0, 52), function()   -- ปุ่มรีเลือดเต็ม
+makeButton("❤️ รีเลือดเต็ม", charTab, halfBtnSize, UDim2.new(0.5, 6, 0, 52), function()   -- ปุ่มรีเลือดเต็ม
 	if humanoid then humanoid.Health = humanoid.MaxHealth end  -- ตั้งเลือดปัจจุบันให้เท่ากับหลอดสูงสุด
 end)
-makeButton("-", charTab, UDim2.new(0, 36, 0, 34), UDim2.new(0, 0, 0, 100), function()  -- ปุ่มลดความเร็ววิ่ง
-	walkSpeedValue = math.clamp(walkSpeedValue - 10, 16, 300)   -- ลดค่า 10 ขั้น (ขอบเขต 16-300)
-	if speedMode and humanoid then humanoid.WalkSpeed = walkSpeedValue end -- ถ้าวิ่งเร็วเปิดอยู่ ใช้ค่าใหม่ทันที
-	refreshToggles()                                            -- อัปเดตป้ายแสดงค่า
+-- สไลเดอร์ปรับความเร็ววิ่ง (ลากเลื่อนได้ 16-300) — ปรับแล้วมีผลทันทีถ้าเปิดโหมดวิ่งเร็วอยู่
+local walkSlider = makeSlider(charTab, 98, "🏃 ความเร็ววิ่ง", 16, 300, walkSpeedValue, function(newValue)
+	walkSpeedValue = newValue                                     -- เก็บค่าใหม่ลงตัวแปรหลัก
+	if speedMode and humanoid then humanoid.WalkSpeed = walkSpeedValue end -- ใช้ค่าใหม่ทันทีถ้าโหมดวิ่งเร็วเปิดอยู่
 end)
-ui.walkSpeedLabel = makeLabel("ความเร็ววิ่ง: 50", charTab, UDim2.new(1, -84, 0, 34), UDim2.new(0, 42, 0, 100), COLOR_TEXT, 14) -- ป้ายค่าความเร็ววิ่ง
-makeButton("+", charTab, UDim2.new(0, 36, 0, 34), UDim2.new(1, -36, 0, 100), function() -- ปุ่มเพิ่มความเร็ววิ่ง
-	walkSpeedValue = math.clamp(walkSpeedValue + 10, 16, 300)   -- เพิ่มค่า 10 ขั้น (ขอบเขต 16-300)
-	if speedMode and humanoid then humanoid.WalkSpeed = walkSpeedValue end -- ถ้าวิ่งเร็วเปิดอยู่ ใช้ค่าใหม่ทันที
-	refreshToggles()                                            -- อัปเดตป้ายแสดงค่า
+ui.walkSpeedLabel = walkSlider.caption                            -- ให้ refreshToggles อัปเดตป้ายเดียวกับสไลเดอร์
+-- สไลเดอร์ปรับความเร็วบิน (ลากเลื่อนได้ 25-500) — ใช้ทันทีทุกเฟรมที่เปิดโหมดบินอยู่
+local flySlider = makeSlider(charTab, 150, "🚀 ความเร็วบิน", 25, 500, flySpeed, function(newValue)
+	flySpeed = newValue                                           -- เก็บค่าใหม่ (ลูปบินอ่านค่านี้ทุกเฟรมอยู่แล้ว)
 end)
-makeButton("-", charTab, UDim2.new(0, 36, 0, 34), UDim2.new(0, 0, 0, 140), function() -- ปุ่มลดความเร็วบิน
-	flySpeed = math.clamp(flySpeed - 25, 25, 500)               -- ลดค่า 25 ขั้น (ขอบเขต 25-500)
-	refreshToggles()                                            -- อัปเดตป้ายแสดงค่า
-end)
-ui.flySpeedLabel = makeLabel("ความเร็วบิน: 100", charTab, UDim2.new(1, -84, 0, 34), UDim2.new(0, 42, 0, 140), COLOR_TEXT, 14) -- ป้ายค่าความเร็วบิน
-makeButton("+", charTab, UDim2.new(0, 36, 0, 34), UDim2.new(1, -36, 0, 140), function() -- ปุ่มเพิ่มความเร็วบิน
-	flySpeed = math.clamp(flySpeed + 25, 25, 500)               -- เพิ่มค่า 25 ขั้น (ขอบเขต 25-500)
-	refreshToggles()                                            -- อัปเดตป้ายแสดงค่า
-end)
-makeLabel("เคล็ดลับ: เปิดโหมดบินแล้วใช้ WASD บินตามทิศกล้อง | Space ขึ้น | Ctrl ลง | ความเร็ววิ่งที่ตั้งจะถูกใช้ตอนเปิดโหมดวิ่งเร็ว", charTab, UDim2.new(1, 0, 0, 50), UDim2.new(0, 4, 0, 186), COLOR_DIM, 13) -- คำอธิบายการใช้งาน
+ui.flySpeedLabel = flySlider.caption                              -- ให้ refreshToggles อัปเดตป้ายเดียวกับสไลเดอร์
+makeLabel("💡 เคล็ดลับ: ลากจุดกลมบนแถบเพื่อปรับค่า | เปิดโหมดบินแล้วใช้ WASD บินตามทิศกล้อง | Space ขึ้น | Ctrl ลง", charTab, UDim2.new(1, 0, 0, 60), UDim2.new(0, 4, 0, 204), COLOR_DIM, 13) -- คำอธิบายการใช้งาน
 
 -- ===================== เนื้อหาแท็บ 3: สร้างของ & วาร์ป =====================
 local spawnTab = tabFrames[3]                                  -- อ้างอิง Frame ของแท็บสร้างของ/วาร์ป
-makeButton("เสก Part ทดสอบ (B)", spawnTab, UDim2.new(0.5, -6, 0, 34), UDim2.new(0, 0, 0, 6), spawnTestPart) -- ปุ่มเสก Part แดง 4x4x4
-makeButton("วาร์ปไปจุดที่เมาส์ (T)", spawnTab, UDim2.new(0.5, -6, 0, 34), UDim2.new(0.5, 6, 0, 6), teleportToMouse) -- ปุ่มวาร์ปไปจุดที่ชี้
-makeButton("ล้างของที่เสกทั้งหมด", spawnTab, UDim2.new(0.5, -6, 0, 34), UDim2.new(0, 0, 0, 44), cleanUp)   -- ปุ่มลบ Part/ประตูที่เสก
-makeButton("บันทึก Waypoint ตำแหน่งนี้", spawnTab, UDim2.new(0.5, -6, 0, 34), UDim2.new(0.5, 6, 0, 44), saveWaypoint) -- ปุ่มบันทึกตำแหน่งปัจจุบัน
-makeLabel("— ระบบประตูวาร์ป (Auto Gate) —", spawnTab, UDim2.new(1, 0, 0, 22), UDim2.new(0, 4, 0, 84), COLOR_ACCENT, 14) -- หัวข้อระบบประตูวาร์ป
+makeButton("🧱 เสก Part ทดสอบ (B)", spawnTab, UDim2.new(0.5, -6, 0, 34), UDim2.new(0, 0, 0, 6), spawnTestPart) -- ปุ่มเสก Part แดง 4x4x4
+makeButton("📍 วาร์ปไปจุดที่เมาส์ (T)", spawnTab, UDim2.new(0.5, -6, 0, 34), UDim2.new(0.5, 6, 0, 6), teleportToMouse) -- ปุ่มวาร์ปไปจุดที่ชี้
+makeButton("🧹 ล้างของที่เสกทั้งหมด", spawnTab, UDim2.new(0.5, -6, 0, 34), UDim2.new(0, 0, 0, 44), cleanUp)   -- ปุ่มลบ Part/ประตูที่เสก
+makeButton("⭐ บันทึก Waypoint ตำแหน่งนี้", spawnTab, UDim2.new(0.5, -6, 0, 34), UDim2.new(0.5, 6, 0, 44), saveWaypoint) -- ปุ่มบันทึกตำแหน่งปัจจุบัน
+makeLabel("— 🌀 ระบบประตูวาร์ป (Auto Gate) —", spawnTab, UDim2.new(1, 0, 0, 22), UDim2.new(0, 4, 0, 84), COLOR_ACCENT, 14) -- หัวข้อระบบประตูวาร์ป
 ui.point1Label = makeLabel("Point 1: (ยังไม่ได้บันทึก)", spawnTab, UDim2.new(1, 0, 0, 20), UDim2.new(0, 4, 0, 108), COLOR_DIM, 13) -- ป้ายแสดง Point 1
 ui.point2Label = makeLabel("Point 2: (ยังไม่ได้บันทึก)", spawnTab, UDim2.new(1, 0, 0, 20), UDim2.new(0, 4, 0, 128), COLOR_DIM, 13) -- ป้ายแสดง Point 2
-makeButton("บันทึก Point 1 (จากที่ยืน)", spawnTab, UDim2.new(0.5, -6, 0, 34), UDim2.new(0, 0, 0, 152), function() -- ปุ่มบันทึกจุดเริ่มต้นประตู
+makeButton("🚩 บันทึก Point 1 (จากที่ยืน)", spawnTab, UDim2.new(0.5, -6, 0, 34), UDim2.new(0, 0, 0, 152), function() -- ปุ่มบันทึกจุดเริ่มต้นประตู
 	if rootPart then                                            -- ถ้ามีตัวละคร
 		point1 = rootPart.CFrame                                -- เก็บพิกัด+ทิศทางปัจจุบันเป็น Point 1
 		print("[DevUtilityV2] บันทึก Point 1 ที่ " .. formatVector3(point1.Position))
@@ -839,11 +1138,11 @@ makeButton("บันทึก Point 1 (จากที่ยืน)", spawnTab,
 		print("[DevUtilityV2] ยังไม่มีตัวละคร")
 	end
 end)
-makeButton("สร้างประตู (Point 2 + สร้าง)", spawnTab, UDim2.new(0.5, -6, 0, 34), UDim2.new(0.5, 6, 0, 152), function() -- ปุ่มสร้างประตูวาร์ป
+makeButton("🌀 สร้างประตู (Point 2 + สร้าง)", spawnTab, UDim2.new(0.5, -6, 0, 34), UDim2.new(0.5, 6, 0, 152), function() -- ปุ่มสร้างประตูวาร์ป
 	buildGate()                                                 -- บันทึก Point 2 + เสกประตูที่ Point 1 + พิมพ์ซอร์สโค้ด
 	refreshToggles()                                            -- อัปเดตป้าย Point 2
 end)
-makeLabel("— Waypoint (บันทึกได้หลายจุด) —", spawnTab, UDim2.new(0.5, -6, 0, 22), UDim2.new(0, 4, 0, 194), COLOR_ACCENT, 14) -- หัวข้อ Waypoint
+makeLabel("— 📌 Waypoint (บันทึกได้หลายจุด) —", spawnTab, UDim2.new(0.5, -6, 0, 22), UDim2.new(0, 4, 0, 194), COLOR_ACCENT, 14) -- หัวข้อ Waypoint
 ui.waypointCountLabel = makeLabel("ที่บันทึก: 0 จุด", spawnTab, UDim2.new(0.5, -6, 0, 22), UDim2.new(0.5, 6, 0, 194), COLOR_DIM, 13) -- ป้ายจำนวน Waypoint
 
 -- ลิสต์ Waypoint (เลื่อนดูได้) พร้อม UIListLayout จัดเรียงแถวอัตโนมัติ
@@ -890,9 +1189,33 @@ rebuildWaypointList = function()
 	end
 end
 
--- ===================== เนื้อหาแท็บ 4: ประสิทธิภาพ (Boost FPS) =====================
-local perfTab = tabFrames[4]                                   -- อ้างอิง Frame ของแท็บประสิทธิภาพ
-makeToggleButton("Boost FPS (ลดกราฟฟิก/ล้างหมอก)", perfTab, UDim2.new(1, 0, 0, 38), UDim2.new(0, 0, 0, 8), -- ปุ่ม toggle Boost FPS
+-- ===================== เนื้อหาแท็บ 4: Aimbot (ล็อกเป้าหมาย) =====================
+local aimTab = tabFrames[4]                                     -- อ้างอิง Frame ของแท็บ Aimbot
+makeToggleButton("🎯 Aimbot (ล็อกเป้าหมาย)", aimTab, UDim2.new(1, 0, 0, 38), UDim2.new(0, 0, 0, 6), -- ปุ่ม toggle เปิด/ปิด Aimbot
+	function() return aimbotEnabled end,                          -- เช็คสถานะ: aimbotEnabled
+	function() setAimbot(not aimbotEnabled) end)                  -- กดแล้ว: สลับสถานะ Aimbot
+makeSlider(aimTab, 50, "🎯 FOV (องศา)", 5, 120, aimFov, function(newValue) -- สไลเดอร์มุมมองจับเป้า 5-120 องศา
+	aimFov = newValue                                           -- เก็บค่าใหม่
+	updateFovCircle()                                           -- อัปเดตขนาดวงกลม FOV กลางจอทันที
+end)
+makeSlider(aimTab, 102, "📏 ระยะเล็ง (สตั๊ด)", 10, 1000, aimRange, function(newValue) -- สไลเดอร์ระยะจับเป้า 10-1000 สตั๊ด
+	aimRange = newValue                                         -- เก็บค่าใหม่ (ลูปเล็งอ่านค่านี้ทุกเฟรมอยู่แล้ว)
+end)
+makeSlider(aimTab, 154, "⚡ ความไว (0-100)", 1, 100, aimSmooth, function(newValue) -- สไลเดอร์ความไวในการเลื่อนกล้อง
+	aimSmooth = newValue                                        -- เก็บค่าใหม่ (มาก = ตามเร็ว, น้อย = นุ่ม)
+end)
+ui.aimPartButton = makeButton("🎯 จุดเล็ง: ศีรษะ (Head)", aimTab, UDim2.new(0.5, -6, 0, 34), UDim2.new(0, 0, 0, 206), function() -- ปุ่มเลือกจุดเล็ง (กดเพื่อวน)
+	aimPartIndex = (aimPartIndex % #AIM_PARTS) + 1               -- วนไปจุดเล็งถัดไป (Head → UpperTorso → HRP → กลับ)
+	refreshToggles()                                            -- อัปเดตป้ายปุ่ม + แถบสถานะ
+end)
+makeToggleButton("🔍 มองเห็นเท่านั้น", aimTab, UDim2.new(0.5, -6, 0, 34), UDim2.new(0.5, 6, 0, 206), -- ปุ่ม toggle เช็คการมองเห็น
+	function() return aimVisibility end,                          -- เช็คสถานะ: aimVisibility
+	function() aimVisibility = not aimVisibility end)             -- กดแล้ว: สลับสถานะ
+makeLabel("💡 วิธีใช้: เปิด Aimbot แล้วกล้องจะเลื่อนไปหาเป้าหมายที่อยู่ในวงกลม FOV อัตโนมัติ\n(รายการเป้าหมายอัปเดตใหม่ทุก 0.25 วินาที) — ปุ่มซ้ายเลือกจุดเล็ง / ปุ่มขวาเลือกโหมดมองทะลุ\n* สำหรับทดสอบระบบเล็งในเกมของตัวเอง ทำงานฝั่ง Client เท่านั้น", aimTab, UDim2.new(1, 0, 0, 74), UDim2.new(0, 4, 0, 250), COLOR_DIM, 12) -- คำอธิบายการใช้งาน Aimbot
+
+-- ===================== เนื้อหาแท็บ 5: ประสิทธิภาพ (Boost FPS) =====================
+local perfTab = tabFrames[5]                                   -- อ้างอิง Frame ของแท็บประสิทธิภาพ
+makeToggleButton("⚡ Boost FPS (ดินน้ำมัน/ปิดเอฟเฟก)", perfTab, UDim2.new(1, 0, 0, 38), UDim2.new(0, 0, 0, 8), -- ปุ่ม toggle Boost FPS
 	function() return boostBackup ~= nil end,                   -- เช็คสถานะ: เปิดอยู่ถ้ามี boostBackup
 	function()                                                 -- กดแล้ว: สลับเปิด/ปิด Boost
 		if boostBackup then                                     -- ถ้าเปิดอยู่ → คืนสภาพเดิม
@@ -901,9 +1224,9 @@ makeToggleButton("Boost FPS (ลดกราฟฟิก/ล้างหมอ�
 			ui.boostSummary.Text = applyBoostFPS()              -- ลดกราฟฟิก/ปิดเอฟเฟก/ล้างหมอก และแสดงสรุปผล
 		end
 	end)
-makeLabel("โหมดนี้ทำงานเฉพาะฝั่ง Client (เหมาะกับการทดสอบใน Studio):", perfTab, UDim2.new(1, 0, 0, 22), UDim2.new(0, 4, 0, 52), COLOR_DIM, 13) -- คำอธิบาย
+makeLabel("🖥️ โหมดนี้ทำงานเฉพาะฝั่ง Client (เหมาะกับการทดสอบใน Studio):", perfTab, UDim2.new(1, 0, 0, 22), UDim2.new(0, 4, 0, 52), COLOR_DIM, 13) -- คำอธิบาย
 ui.boostSummary = makeLabel("สถานะ: ยังไม่ได้เปิด Boost FPS", perfTab, UDim2.new(1, 0, 0, 96), UDim2.new(0, 4, 0, 76), COLOR_TEXT, 13) -- ป้ายสรุปผลการทำ Boost
-makeLabel("สิ่งที่ทำเมื่อเปิด:\n• ลด QualityLevel ของเกมลงขั้นต่ำสุด\n• ปิด PostEffect ใน Lighting (Bloom / Blur / SunRays / ColorCorrection / DepthOfField)\n• ล้างหมอก Atmosphere และ Fog ให้มองเห็นไกลขึ้น\n• ปิด ParticleEmitter / Beam / Trail ทั่วแมป (ยกเว้นส่วนของตัวละคร)\n\nกดปุ่ม Boost FPS อีกครั้งเพื่อคืนสภาพกราฟฟิกเดิมทุกอย่าง", perfTab, UDim2.new(1, 0, 1, -180), UDim2.new(0, 4, 0, 180), COLOR_DIM, 12) -- คำอธิบายละเอียด
+makeLabel("📋 สิ่งที่ทำเมื่อเปิด:\n• ลด QualityLevel ของเกมลงขั้นต่ำสุด\n• เปลี่ยนวัสดุทุกชิ้นเป็น SmoothPlastic (ลุคดินน้ำมัน) + ปิด Reflectance + ปิดการสะท้อนสภาพแวดล้อม\n• ปิดเท็กซ์เจอร์/พื้นผิว PBR (Texture, Decal, SurfaceAppearance)\n• ปิดเอฟเฟกทุกชนิด (Bloom/Blur/SunRays/ColorCorrection/DepthOfField, Particle, Beam, Trail, Fire, Smoke, Sparkles)\n• ล้างหมอก Atmosphere และ Fog (ทั้งหมดยกเว้นส่วนของตัวละคร)\n\nกดปุ่ม Boost FPS อีกครั้งเพื่อคืนสภาพเดิมทุกอย่าง", perfTab, UDim2.new(1, 0, 1, -180), UDim2.new(0, 4, 0, 180), COLOR_DIM, 12) -- คำอธิบายละเอียด
 
 -- ===================== การเปิด/ปิดเมนู และการลากหน้าต่าง =====================
 closeButton.MouseButton1Click:Connect(function()                -- ตอนคลิกปุ่ม ✕
@@ -949,8 +1272,9 @@ refreshToggles = function()
 		item.button.BackgroundColor3 = on and COLOR_ACCENT or COLOR_BTN   -- เปิด = สีเน้น / ปิด = สีปกติ
 		item.button.TextColor3 = on and COLOR_DARK or COLOR_TEXT         -- เปิด = ตัวอักษรมืด / ปิด = ตัวอักษรสว่าง
 	end
-	if ui.walkSpeedLabel then ui.walkSpeedLabel.Text = "ความเร็ววิ่ง: " .. walkSpeedValue end    -- อัปเดตป้ายความเร็ววิ่ง
-	if ui.flySpeedLabel then ui.flySpeedLabel.Text = "ความเร็วบิน: " .. flySpeed end            -- อัปเดตป้ายความเร็วบิน
+	if ui.walkSpeedLabel then ui.walkSpeedLabel.Text = "🏃 ความเร็ววิ่ง: " .. walkSpeedValue end    -- อัปเดตป้ายความเร็ววิ่ง
+	if ui.flySpeedLabel then ui.flySpeedLabel.Text = "🚀 ความเร็วบิน: " .. flySpeed end            -- อัปเดตป้ายความเร็วบิน
+	if ui.aimPartButton then ui.aimPartButton.Text = "🎯 จุดเล็ง: " .. AIM_PARTS[aimPartIndex].label end -- อัปเดตป้ายจุดเล็ง Aimbot
 	if ui.point1Label then ui.point1Label.Text = "Point 1: " .. (point1 and formatVector3(point1.Position) or "(ยังไม่ได้บันทึก)") end -- อัปเดตป้าย Point 1
 	if ui.point2Label then ui.point2Label.Text = "Point 2: " .. (point2 and formatVector3(point2.Position) or "(ยังไม่ได้บันทึก)") end -- อัปเดตป้าย Point 2
 	if ui.waypointCountLabel then ui.waypointCountLabel.Text = "ที่บันทึก: " .. #waypoints .. " จุด" end -- อัปเดตจำนวน Waypoint
@@ -1025,7 +1349,11 @@ RunService.Heartbeat:Connect(function()
 			end
 		end
 	end
-	-- 2) อัปเดตข้อมูล Real-time บนแท็บหน้าหลัก (ถี่ประมาณ 4 ครั้ง/วินาที พอให้อ่านทัน)
+	-- 2) คงค่าโหมดวิ่งเร็วไว้ (กันค่าถูกเขียนทับโดยสคริปต์อื่นในเกม หรือตอนตัวละครเพิ่งเกิด/respawn)
+	if speedMode and humanoid and humanoid.Parent and humanoid.WalkSpeed ~= walkSpeedValue then
+		humanoid.WalkSpeed = walkSpeedValue                       -- เขียนค่าความเร็วกลับทุกครั้งที่พบว่าถูกแก้
+	end
+	-- 3) อัปเดตข้อมูล Real-time บนแท็บหน้าหลัก (ถี่ประมาณ 4 ครั้ง/วินาที พอให้อ่านทัน)
 	local now = os.clock()                                       -- อ่านเวลาปัจจุบัน
 	if now - lastInfoUpdate >= 0.25 then                         -- ถ้าผ่านมา 0.25 วินาทีแล้ว
 		lastInfoUpdate = now                                     -- บันทึกเวลาอัปเดตล่าสุด
@@ -1039,6 +1367,7 @@ RunService.Heartbeat:Connect(function()
 		if ui.timeLabel then                                     -- อัปเดตป้ายเวลาที่เปิดใช้งาน
 			ui.timeLabel.Text = "เวลาที่เปิดใช้งาน: " .. formatDuration(os.clock() - scriptStartTime) -- เวลาที่ผ่านไปตั้งแต่สคริปต์เริ่มรัน
 		end
+		if aimbotEnabled then refreshAimCandidates() end         -- สแกนรายการเป้าหมายใหม่ทุก 0.25 วินาที ระหว่างเปิด Aimbot
 	end
 end)
 
