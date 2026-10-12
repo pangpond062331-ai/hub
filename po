@@ -7,7 +7,8 @@
 	สิ่งที่มีในเวอร์ชันนี้
 	--------------------------------------------------------------------
 	* เมนู GUI ภาษาไทย พร้อมปุ่มเปิด/ปิด (ปุ่ม ☰ เปิด / ปุ่ม ✕ ปิด) และลากหน้าต่างได้
-	* 5 แท็บ: [หน้าหลัก] [ตัวละคร] [สร้าง/วาร์ป] [Aimbot] [ประสิทธิภาพ]
+	* 5 แท็บเรียงแนวตั้งด้าน "ซ้าย" ของหน้าต่าง: [หน้าหลัก] [ตัวละคร] [สร้าง/วาร์ป] [ต่อสู้] [ประสิทธิภาพ]
+	  (จัดกลุ่มโหมดที่ควรอยู่รวมกัน: ระบบตี/มองศัตรูอยู่แท็บเดียว = Aimbot + ESP)
 	* ข้อมูล Real-time: พิกัดตัวละคร, FPS, Ping, เวลาที่เปิดใช้งาน, สถานะโหมดต่าง ๆ
 	* ระบบตัวละคร: วิ่งเร็ว (ลากสไลเดอร์ปรับ 16-300 + คงค่าข้ามการเกิดใหม่), NoClip,
 	  โหมดบิน (ลากสไลเดอร์ปรับ 25-500), รีเลือดเต็ม
@@ -15,8 +16,11 @@
 	  Waypoint หลายจุดพร้อมลิสต์ใน GUI (บันทึก/วาร์ป/ลบรายจุด), ล้างของที่เสกทั้งหมด
 	* ระบบ Boost FPS: ลดคุณภาพกราฟฟิกขั้นต่ำสุด, เปลี่ยนวัสดุทุกชิ้นเป็น SmoothPlastic (ลุคดินน้ำมัน),
 	  ปิด Reflectance/Texture/พื้นผิว PBR, ปิดเอฟเฟกทุกชนิด, ล้างหมอก — คืนสภาพเดิมได้เมื่อกดปิด
-	* ระบบ Aimbot (ล็อกเป้าหมายทดสอบ): สไลเดอร์ FOV/ระยะ/ความไว, เลือกจุดเล็ง (Head/ลำตัวบน/HRP),
-	  โหมดมองเห็นเท่านั้น, วงกลมแสดงขอบเขต FOV กลางจอ — สำหรับทดสอบระบบเล็งในเกมตัวเอง (Client)
+	* ระบบ Aimbot (ยิงในวง = โดน): ไม่ล็อกกล้อง — สแนปกล้องเฉพาะตอนกดยิง, สไลเดอร์ FOV/ระยะ/ความไว,
+	  เลือกจุดเล็ง (Head/ลำตัวบน/HRP), โหมดมองเห็นเท่านั้น, วงกลม FOV กลางจอ (ฝั่ง Client)
+	  * ไม่เล็ง/ไม่ยิง "เพื่อนร่วมทีม" — เฉพาะศัตรู (คนละทีม) เท่านั้น
+	* ระบบ ESP ศัตรู (เรียลไทม์): ไฮไลต์ทะลุกำแพง + ป้ายชื่อ/ระยะ เฉพาะ "ศัตรู" ไม่แสดงเพื่อนร่วมทีม
+	  อัปเดตอัตโนมัติทุก 0.25 วินาที (เพิ่ม/ถอดเองตามการเกิด/ตาย/เข้า-ออกเกม) (ฝั่ง Client)
 
 	คีย์ลัดที่เหลืออยู่ (เหลือเฉพาะ 3 ตัว ตามที่ผู้ใช้ระบุ ส่วนอื่นใช้ผ่านเมนู GUI)
 	--------------------------------------------------------------------
@@ -70,6 +74,11 @@ local aimPartIndex = 1                                           -- จุดเ
 local aimVisibility = true                                       -- เช็คการมองเห็น (ไม่เล็งทะลุกำแพง)
 local aimCandidates = {}                                         -- รายการเป้าหมายที่สแกนไว้ (รีเฟรชทุก 0.25 วินาที)
 local aimBindName = "DevUtilityV2_Aimbot"                        -- ชื่อสำหรับ BindToRenderStep (ห้ามซ้ำกับที่อื่น)
+local fireAiming = false                                         -- สถานะว่ากำลัง "กดเมาส์ซ้ายค้าง" เพื่อยิง (Aimbot จะตามเป้าเฉพาะตอนนี้)
+
+-- สถานะระบบ ESP (ไฮไลต์ศัตรูแบบเรียลไทม์ — ไม่แสดงเพื่อนร่วมทีม ทำงานฝั่ง Client)
+local espEnabled = false                                         -- สถานะ ESP (true = เปิด)
+local espApplied = {}                                            -- Highlight/ป้ายชื่อที่ใส่ไว้แล้ว { [Model ศัตรู] = { highlight, billboard, label } }
 
 -- สถานะของ Teleport Builder และ Waypoint
 local point1 = nil                                               -- CFrame ของจุดเริ่มต้น/Entrance ของประตูวาร์ป
@@ -95,6 +104,7 @@ local ui = {}                                                    -- เก็บ
 local toggleRegistry = {}                                        -- รายการปุ่ม toggle ทั้งหมด เพื่อ refresh พร้อมกัน
 local waypointListFrame = nil                                    -- ScrollingFrame ของลิสต์ Waypoint (กำหนดค่าตอนสร้าง GUI)
 local fovCircle = nil                                            -- Frame วงกลมแสดงขอบเขต Aimbot/FOV (กำหนดค่าตอนสร้าง GUI)
+local mainWindow = nil                                           -- หน้าต่างเมนูหลัก (จองไว้ให้ตัวจับการกดยิงเช็คพื้นที่เมนูได้แม้ประกาศทีหลัง)
 local refreshToggles                                             -- forward: ฟังก์ชันอัปเดตป้าย UI ทุกจุด (กำหนดค่าทีหลัง)
 local rebuildWaypointList                                        -- forward: ฟังก์ชันสร้างลิสต์ Waypoint ใหม่ (กำหนดค่าทีหลัง)
 
@@ -136,12 +146,13 @@ end
 -- สร้างข้อความสรุปสถานะโหมดต่าง ๆ สำหรับแสดงบน HUD (ใช้ทั้งใน GUI และอัปเดตอัตโนมัติ)
 local function statusString()
 	return string.format(                                        -- ต่อข้อความหลายส่วน
-		"📊 วิ่งเร็ว: %s | NoClip: %s | บิน: %s | Boost FPS: %s | Aimbot: %s", -- รูปแบบข้อความสรุป (มีไอคอนแผ่นกราฟนำหน้า)
-		speedMode and "เปิด" or "ปิด",                           -- สถานะวิ่งเร็ว
+		"📊 วิ่งเร็ว: %s | NoClip: %s | บิน: %s | Boost FPS: %s | Aimbot: %s | ESP: %s", -- รูปแบบข้อความสรุป (มีไอคอนแผ่นกราฟนำหน้า)
+		speedMode and string.format("เปิด[จริง:%.0f/ตั้ง:%d]", (humanoid and humanoid.WalkSpeed or -1), walkSpeedValue) or "ปิด", -- สถานะวิ่งเร็ว + ค่าจริงในเกม/ค่าที่ตั้งไว้ (ไว้เช็คว่าค่าถูกเกมเขียนทับไหม)
 		noClipEnabled and "เปิด" or "ปิด",                       -- สถานะ NoClip
 		flyEnabled and "เปิด" or "ปิด",                          -- สถานะบิน
 		boostBackup and "เปิด" or "ปิด",                         -- สถานะ Boost FPS
-		aimbotEnabled and "เปิด" or "ปิด"                        -- สถานะ Aimbot
+		aimbotEnabled and "เปิด" or "ปิด",                       -- สถานะ Aimbot
+		espEnabled and "เปิด" or "ปิด"                           -- สถานะ ESP ศัตรู
 	)
 end
 
@@ -278,14 +289,24 @@ local AIM_PARTS = {
 	{ key = "HumanoidRootPart", label = "กลางลำตัว (HRP)" },       -- กลางลำตัว (มีทุกตัวละคร)
 }
 
--- สแกนหาเป้าหมาย (Model ที่มี Humanoid ยังมีชีวิต) ทั่ว Workspace — เรียกซ้ำทุก 0.25 วินาที
+-- เช็คว่าผู้เล่นคนนี้เป็น "เพื่อนร่วมทีม" ของเราหรือไม่ (ใช้ร่วมกันทั้ง Aimbot และ ESP)
+local function isTeammate(otherPlayer)
+	if otherPlayer == player then return false end               -- ตัวเราเองไม่นับเป็นเพื่อนร่วมทีม (มีการกันไว้แยกอยู่แล้ว)
+	if otherPlayer.Team == nil or player.Team == nil then return false end -- ฝั่งใดฝั่งหนึ่งไม่มีทีม → ไม่ถือว่าเป็นทีมเดียวกัน
+	return otherPlayer.Team == player.Team                       -- มีทีมทั้งคู่ → เพื่อนร่วมทีมก็ต่อเมื่อเป็น Team เดียวกัน
+end
+
+-- สแกนหาเป้าหมาย (Model ที่มี Humanoid ยังมีชีวิต) ทั่ว Workspace — เรียกซ้ำทุก 0.25 วินาที (ไม่รวมเพื่อนร่วมทีม)
 local function refreshAimCandidates()
 	aimCandidates = {}                                            -- ล้างรายการเป้าหมายเก่า
 	for _, inst in ipairs(workspace:GetDescendants()) do           -- วน Instance ทุกตัวใน Workspace
 		if inst:IsA("Model") then                                -- เฉพาะ Model เท่านั้น
 			local hum = inst:FindFirstChildOfClass("Humanoid")   -- หา Humanoid ที่อยู่ใน Model นี้
 			if hum and hum.Health > 0 and inst ~= character then -- มี Humanoid + ยังไม่ตาย + ไม่ใช่ตัวละครเราเอง
-				table.insert(aimCandidates, { model = inst, humanoid = hum }) -- เพิ่มเข้ารายการเป้าหมาย
+				local owner = Players:GetPlayerFromCharacter(inst) -- เจ้าของตัวละคร (nil = NPC ที่ไม่ใช่ผู้เล่น)
+				if not owner or not isTeammate(owner) then      -- เก็บเฉพาะที่ "ไม่ใช่เพื่อนร่วมทีม" (NPC เก็บได้ตามเดิม)
+					table.insert(aimCandidates, { model = inst, humanoid = hum }) -- เพิ่มเข้ารายการเป้าหมาย
+				end
 			end
 		end
 	end
@@ -317,10 +338,10 @@ local function updateFovCircle()
 	fovCircle.Position = UDim2.new(0.5, -diameter / 2, 0.5, -diameter / 2) -- วางกึ่งกลางหน้าจอพอดี
 end
 
--- ฟังก์ชันหลักของ Aimbot (รันทุกเฟรม หลังกล้องอัปเดตแล้ว) — หาเป้าหมายในกรอบ FOV แล้วหมุนกล้องไปหาแบบนุ่มนวล
-local function aimbotStep()
+-- หาเป้าหมายที่ดีที่สุดในกรอบ FOV (มุมแคบสุด + อยู่ในระยะ + มองเห็นตามโหมด) — คืน Part ของเป้า หรือ nil
+local function findBestTarget()
 	local cam = workspace.CurrentCamera
-	if not (aimbotEnabled and cam) then return end              -- ปิดอยู่หรือไม่มีกล้อง → จบเฟรมนี้
+	if not cam then return nil end                               -- ไม่มีกล้อง → ไม่มีเป้า
 	local camCF = cam.CFrame                                     -- CFrame ของกล้องปัจจุบัน
 	local camPos = camCF.Position                                -- ตำแหน่งกล้องในโลก
 	local halfFovRad = math.rad(halfFovDegrees())                -- ครึ่ง FOV แปลงเป็นเรเดียน
@@ -357,11 +378,28 @@ local function aimbotStep()
 			end
 		end
 	end
-	if bestPart then                                            -- เจอเป้าหมายที่จะเล็ง
-		local desiredCF = CFrame.lookAt(camPos, bestPart.Position, camCF.UpVector) -- CFrame ที่ต้องการ (กล้องหันไปหาเป้า)
-		local blend = math.clamp(aimSmooth / 100, 0.05, 1)      -- ค่าความไว (0.05 = นุ่มมาก, 1 = ตามทันที)
-		cam.CFrame = camCF:Lerp(desiredCF, blend)                -- หมุนกล้องไปหาเป้าแบบค่อย ๆ เลื่อน
+	return bestPart                                              -- คืน Part ของเป้าที่ดีที่สุด (หรือ nil ถ้าไม่มีใครอยู่ในวง)
+end
+
+-- หันกล้องไปหาเป้า (instant = สแนปทันทีตอนกดยิง / ไม่ instant = ค่อย ๆ เลื่อนตามสไลเดอร์ความไว)
+local function aimCameraAt(part, instant)
+	local cam = workspace.CurrentCamera
+	if not (cam and part) then return end                       -- ไม่มีกล้องหรือไม่มีเป้า → จบ
+	local camCF = cam.CFrame                                     -- CFrame กล้องปัจจุบัน
+	local desiredCF = CFrame.lookAt(camCF.Position, part.Position, camCF.UpVector) -- CFrame ที่หันไปหาเป้า
+	if instant then
+		cam.CFrame = desiredCF                                   -- สแนปทันที (ตอนกดยิง เพื่อให้กระสุนโดนตั้งนัดแรก)
+	else
+		local blend = math.clamp(aimSmooth / 100, 0.05, 1)      -- ค่าความไวจากสไลเดอร์ (0.05 = นุ่ม, 1 = ทันที)
+		cam.CFrame = camCF:Lerp(desiredCF, blend)                -- ค่อย ๆ เลื่อนไปหาเป้าระหว่างกดยิง
 	end
+end
+
+-- ลูปช่วงยิง (รันทุกเฟรมหลังกล้องอัปเดต) — ทำงานเฉพาะตอน "กดเมาส์ซ้ายค้าง" เท่านั้น ไม่ล็อกกล้องตอนไม่ยิง
+local function aimbotStep()
+	if not (aimbotEnabled and fireAiming) then return end       -- ไม่ได้เปิด หรือ ไม่ได้กดยิง → ไม่แตะกล้อง
+	local part = findBestTarget()                               -- หาเป้าที่อยู่ในวง ณ ตอนนี้
+	if part then aimCameraAt(part, false) end                   -- เลื่อนกล้องตามเป้าระหว่างกดยิง (ปล่อยเมาส์ = หยุด)
 end
 
 -- เปิด/ปิด Aimbot: ผูก/ถอนลูปเล็งจาก RenderStep + แสดง/ซ่อนวงกลม FOV
@@ -376,7 +414,121 @@ local function setAimbot(enabled)
 		if fovCircle then fovCircle.Visible = true end           -- แสดงวงกลม FOV กลางจอ
 	else
 		RunService:UnbindFromRenderStep(aimBindName)             -- ถอนลูปเล็งออก
+		fireAiming = false                                       -- ยกเลิกสถานะกดยิง (กันค้าง)
 		if fovCircle then fovCircle.Visible = false end          -- ซ่อนวงกลม FOV
+	end
+end
+
+-- จับการกดยิง: ตอนกดเมาส์ซ้าย (ยิง) ถ้ามีเป้าอยู่ในวง → สแนปกล้องเข้าเป้าทันทีเพื่อให้กระสุนโดน
+-- หมายเหตุ: ทำงานเฉพาะตอน Aimbot เปิด + คลิกไม่ได้ทับ GUI เมนู (gameProcessedEvent = true จะถูกข้าม)
+UserInputService.InputBegan:Connect(function(input, gameProcessedEvent)
+	if gameProcessedEvent then return end                       -- คลิกผ่าน GUI เมนู → ข้าม ไม่สั่งหันกล้อง
+	if mainWindow and mainWindow.Visible then                   -- ถ้าเมนูเปิดอยู่ ให้เช็คว่าเมาส์อยู่ในเขตหน้าต่างด้วย
+		local p = input.Position                                -- ตำแหน่งเมาส์บนหน้าจอ (ระบบพิกัดเดียวกับ AbsolutePosition)
+		local absPos = mainWindow.AbsolutePosition              -- มุมซ้ายบนของหน้าต่างเมนู
+		local absSize = mainWindow.AbsoluteSize                 -- ขนาดหน้าต่างเมนู
+		if p.X >= absPos.X and p.X <= absPos.X + absSize.X      -- อยู่ในช่วงแนวนอนของเมนู
+			and p.Y >= absPos.Y and p.Y <= absPos.Y + absSize.Y then -- และอยู่ในช่วงแนวตั้งของเมนู
+			return                                               -- คลิกในเขตเมนู → ไม่สั่งหันกล้อง
+		end
+	end
+	if not aimbotEnabled then return end                        -- Aimbot ปิดอยู่ → ข้าม
+	if input.UserInputType == Enum.UserInputType.MouseButton1 then -- ตอนกดปุ่มเมาส์ซ้าย (ยิง)
+		local part = findBestTarget()                           -- หาเป้าที่อยู่ในกรอบวง FOV
+		if part then
+			aimCameraAt(part, true)                             -- สแนปกล้องไปหาเป้าทันที (ให้กระสุนโดนตั้งนัดแรก)
+			fireAiming = true                                   -- เข้าสู่โหมดตามเป้า ระหว่างกดยิงค้างไว้
+		end
+	end
+end)
+UserInputService.InputEnded:Connect(function(input)            -- ตอนปล่อยปุ่มเมาส์
+	if input.UserInputType == Enum.UserInputType.MouseButton1 then
+		fireAiming = false                                      -- หยุดบังคับกล้อง → คืนบังคับให้ผู้เล่นเอง (ไม่ล็อกค้าง)
+	end
+end)
+
+-- ===================== ระบบ ESP (ไฮไลต์ศัตรูเรียลไทม์ — ไม่แสดงเพื่อนร่วมทีม) =====================
+
+-- ลบ Highlight/ป้ายชื่อ ออกจากตัวละครเป้าหมายตัวนี้ (ใช้ตอนตัวละครตาย/ออกจากทีม/ปิด ESP)
+local function removeEspFrom(model)
+	local applied = espApplied[model]                             -- หยิบข้อมูล ESP ของตัวละครนี้
+	if applied then                                               -- ถ้าเคยใส่ ESP ไว้
+		if applied.highlight then applied.highlight:Destroy() end -- ลบ Highlight ทิ้ง
+		if applied.billboard then applied.billboard:Destroy() end -- ลบป้ายชื่อทิ้ง
+		espApplied[model] = nil                                   -- เคลียร์ออกจากตาราง
+	end
+end
+
+-- ใส่ Highlight สีแดงทะลุกำแพง + ป้ายชื่อ/ระยะ ให้ตัวละคร "ศัตรู" ตัวนี้
+local function addEspTo(model, otherPlayer)
+	local highlight = Instance.new("Highlight")                   -- Highlight = กรอบเรืองแสงรอบตัวละคร (เรนเดอร์โดยเอนจิน)
+	highlight.Name = "DevESP_Highlight"                           -- ตั้งชื่อเพื่อระบุว่าเป็นของเรา
+	highlight.FillColor = Color3.fromRGB(255, 60, 60)             -- สีแดง = ศัตรู
+	highlight.FillTransparency = 0.55                              -- พื้นในโปร่งแสงพอให้เห็นตัวละครด้านใน
+	highlight.OutlineColor = Color3.fromRGB(255, 170, 60)         -- สีขอบส้มเรืองแสง
+	highlight.OutlineTransparency = 0                              -- ขอบทึบมองเห็นชัด
+	highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop      -- เห็นทะลุกำแพง/วัตถุ (หัวใจของ ESP)
+	highlight.Parent = model                                      -- ผูกกับ Model ตัวละครศัตรู
+	local head = model:FindFirstChild("Head") or model:FindFirstChild("HumanoidRootPart") -- จุดยึดป้ายชื่อ (หัวก่อน HRP สำรอง)
+	local billboard = Instance.new("BillboardGui")                -- ป้ายลอยเหนือหัว
+	billboard.Name = "DevESP_Billboard"                           -- ตั้งชื่อเพื่อระบุว่าเป็นของเรา
+	billboard.Size = UDim2.new(0, 160, 0, 34)                     -- ขนาดป้าย 160x34 px
+	billboard.StudsOffset = Vector3.new(0, 2.6, 0)                -- ยกเหนือหัวเล็กน้อย กันบังหน้า
+	billboard.AlwaysOnTop = true                                  -- แสดงทับทุกอย่าง (อ่านชื่อได้แม้อยู่หลังกำแพง)
+	billboard.LightInfluence = 0                                  -- ไม่รับผลจากแสงในฉาก (ตัวอักษรสว่างเสมอ)
+	local nameLabel = Instance.new("TextLabel")                    -- ข้อความชื่อผู้เล่น + ระยะห่าง
+	nameLabel.Size = UDim2.new(1, 0, 1, 0)                        -- เต็มพื้นที่ป้าย
+	nameLabel.BackgroundTransparency = 0.35                       -- พื้นหลังมืดจาง ๆ ให้อ่านง่าย
+	nameLabel.BackgroundColor3 = Color3.fromRGB(20, 16, 40)       -- สีพื้นหลังม่วงเข้ม
+	nameLabel.Font = Enum.Font.GothamMedium                       -- ฟอนต์เดียวกับเมนู (ใช้ Enum ตรง ๆ เพราะยังไม่ถึงตัวแปร FONT)
+	nameLabel.TextSize = 13                                       -- ขนาดตัวอักษร
+	nameLabel.TextColor3 = Color3.fromRGB(255, 90, 90)            -- ตัวอักษรแดงเข้ม (ตัดกับพื้นมืด)
+	nameLabel.TextWrapped = true                                  -- ตัดบรรทัดถ้าชื่อยาว
+	nameLabel.Text = otherPlayer.DisplayName                      -- ข้อความเริ่มต้น = ชื่อผู้เล่น
+	nameLabel.Parent = billboard                                  -- ใส่ป้ายข้อความเข้า Billboard
+	local corner = Instance.new("UICorner")                       -- มุมโค้งให้ป้าย
+	corner.CornerRadius = UDim.new(0, 6)                          -- รัศมี 6px
+	corner.Parent = nameLabel                                     -- ผูกกับป้ายข้อความ
+	billboard.Parent = head                                       -- ยึดที่หัว (ไม่เจอหัว → มีแค่ไฮไลต์ ไม่มีป้ายชื่อ)
+	espApplied[model] = { highlight = highlight, billboard = billboard, label = nameLabel } -- บันทึกไว้ใช้อัปเดต/ลบภายหลัง
+end
+
+-- อัปเดต ESP ทั้งหมด (เรียกซ้ำทุก 0.25 วินาทีระหว่างเปิด): เพิ่ม/ถอด/อัปเดตชื่อ+ระยะ ตาม "ศัตรู" ล่าสุด
+local function refreshESP()
+	local currentEnemies = {}                                     -- รายการศัตรูที่ถูกต้อง ณ ตอนนี้
+	for _, other in ipairs(Players:GetPlayers()) do                -- วนผู้เล่นทุกคนในเซิร์ฟเวอร์
+		if other ~= player and not isTeammate(other) and other.Character then -- ไม่ใช่เรา + ไม่ใช่เพื่อนร่วมทีม + มีตัวละคร
+			local hum = other.Character:FindFirstChildOfClass("Humanoid")
+			if hum and hum.Health > 0 then                        -- มี Humanoid และยังไม่ตาย
+				currentEnemies[other.Character] = other           -- ถือว่าเป็นศัตรูที่ต้องขึ้นไฮไลต์
+			end
+		end
+	end
+	for model in pairs(espApplied) do                             -- วนตัวละครที่เคยใส่ ESP ไว้
+		if not currentEnemies[model] then removeEspFrom(model) end -- ไม่ใช่ศัตรูแล้ว (ตาย/เข้าทีมเรา/ออกจากเกม) → ถอด ESP ออก
+	end
+	for model, other in pairs(currentEnemies) do                  -- วนศัตรูปัจจุบัน
+		local applied = espApplied[model]                         -- ข้อมูล ESP ของตัวละครนี้
+		if not applied then                                       -- ยังไม่เคยใส่ ESP ให้ตัวนี้
+			addEspTo(model, other)                                -- ใส่ Highlight + ป้ายชื่อให้เลย
+		elseif applied.label and rootPart and rootPart.Parent then -- มีป้ายอยู่และตัวเรามีตัวละคร (ใช้คำนวณระยะ)
+			local hrp = model:FindFirstChild("HumanoidRootPart")   -- จุดกลางตัวศัตรู
+			if hrp then                                            -- เจอ → อัปเดตข้อความชื่อ + ระยะล่าสุด
+				local distance = (hrp.Position - rootPart.Position).Magnitude -- ระยะห่างระหว่างเรากับศัตรู (หน่วยสตั๊ด)
+				applied.label.Text = string.format("%s [%.0f]", other.DisplayName, distance)
+			end
+		end
+	end
+end
+
+-- เปิด/ปิด ESP: เปิด = สแกนใส่ไฮไลต์ทันที / ปิด = ถอดไฮไลต์+ป้ายออกจากทุกคน
+local function setESP(enabled)
+	espEnabled = enabled                                          -- อัปเดตสถานะ ESP
+	if espEnabled then
+		refreshESP()                                              -- ใส่ ESP ให้ศัตรูทันทีตอนเปิด
+	else
+		for model in pairs(espApplied) do removeEspFrom(model) end -- ถอด ESP ออกจากทุกคนที่ค้างอยู่
+		espApplied = {}                                           -- เคลียร์ตารางให้สะอาด
 	end
 end
 
@@ -952,7 +1104,7 @@ fovStroke.Parent = fovCircle                                    -- ผูกก�
 fovCircle.Parent = screenGui                                    -- ใส่เข้า ScreenGui (แสดงกลางจอทับได้ทุกแท็บ)
 
 -- หน้าต่างเมนูหลัก (วางกึ่งกลางจอ)
-local mainWindow = Instance.new("Frame")                        -- สร้าง Frame หน้าต่างหลัก
+mainWindow = Instance.new("Frame")                              -- สร้าง Frame หน้าต่างหลัก (ใช้ตัวแปรที่จองไว้ด้านบน)
 mainWindow.Name = "MainWindow"                                  -- ตั้งชื่อ
 mainWindow.Size = UDim2.new(0, 500, 0, 430)                     -- ขนาด 500x430 px
 mainWindow.Position = UDim2.new(0.5, -250, 0.5, -215)           -- กึ่งกลางจอ
@@ -1021,28 +1173,39 @@ closeButton.AutoButtonColor = false                             -- ปิดเ�
 addCorner(closeButton, 6)                                       -- ทำมุมโค้ง
 closeButton.Parent = titleBar                                   -- ใส่เข้าแถบหัวเรื่อง
 
--- แถบแท็บ (5 แท็บเรียงแนวนอน)
-local tabBar = Instance.new("Frame")                            -- สร้าง Frame แถบแท็บ
-tabBar.Size = UDim2.new(1, -12, 0, 36)                          -- กว้างเท่าหน้าต่าง - 12px สูง 36px
-tabBar.Position = UDim2.new(0, 6, 0, 44)                        -- ใต้แถบหัวเรื่อง
-tabBar.BackgroundTransparency = 1                               -- ไม่มีพื้นหลัง
+-- แถบแท็บ (ด้าน "ซ้าย" แนวตั้ง — ปุ่มโหมดแต่ละแท็บเรียงจากบนลงล่าง)
+local tabBar = Instance.new("Frame")                            -- สร้าง Frame แถบแท็บ ( sidebar ซ้ายมือ)
+tabBar.Size = UDim2.new(0, 112, 1, -48)                         -- กว้าง 112px เต็มความสูงใต้แถบหัวเรื่อง
+tabBar.Position = UDim2.new(0, 4, 0, 44)                        -- ชิดขอบซ้าย ใต้แถบหัวเรื่อง
+tabBar.BackgroundColor3 = COLOR_BAR                             -- พื้นหลังม่วงเข้ม ให้ดูเป็นแถบเมนูแยกชัดจากเนื้อหา
+tabBar.BorderSizePixel = 0                                      -- ปิดเส้นขอบ
 tabBar.Parent = mainWindow                                      -- ใส่เข้าหน้าต่างหลัก
+addCorner(tabBar, 8)                                            -- ทำมุมโค้งให้แถบเมนู
 
 local tabLayout = Instance.new("UIListLayout")                  -- จัดเรียงปุ่มแท็บอัตโนมัติ
-tabLayout.FillDirection = Enum.FillDirection.Horizontal         -- เรียงแนวนอน
-tabLayout.Padding = UDim.new(0, 4)                              -- ระยะห่างระหว่างปุ่ม 4px
-tabLayout.HorizontalAlignment = Enum.HorizontalAlignment.Left   -- ชิดซ้าย
-tabLayout.VerticalAlignment = Enum.VerticalAlignment.Center     -- กึ่งกลางแนวตั้ง
+tabLayout.FillDirection = Enum.FillDirection.Vertical            -- เรียงแนวตั้ง (บน → ล่าง)
+tabLayout.Padding = UDim.new(0, 6)                              -- ระยะห่างระหว่างปุ่ม 6px
+tabLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center  -- จัดปุ่มกึ่งกลางแนวนอนในแถบ
+tabLayout.VerticalAlignment = Enum.VerticalAlignment.Top         -- เรียงจากด้านบนลงล่าง
 tabLayout.Parent = tabBar                                       -- ผูกกับแถบแท็บ
 
--- พื้นที่เนื้อหาของแท็บ (ด้านล่างแถบแท็บ)
+-- เส้นคั่นบาง ๆ ระหว่างแถบซ้ายกับพื้นที่เนื้อหา (ให้ดูแยกโซนชัดขึ้น)
+local sideDivider = Instance.new("Frame")                       -- สร้าง Frame เส้นคั่นแนวตั้ง
+sideDivider.Size = UDim2.new(0, 1, 1, -60)                      -- เส้นบาง 1px สูงเกือบเต็มหน้าต่าง
+sideDivider.Position = UDim2.new(0, 121, 0, 54)                 -- ชิดขอบขวาของแถบแท็บ
+sideDivider.BackgroundColor3 = COLOR_ACCENT2                    -- สีฟ้าไซเบอร์ (เส้นเรืองแสงตามธีม)
+sideDivider.BackgroundTransparency = 0.7                        -- จาง ๆ ไม่แยงตา
+sideDivider.BorderSizePixel = 0                                 -- ปิดเส้นขอบ
+sideDivider.Parent = mainWindow                                 -- ใส่เข้าหน้าต่างหลัก
+
+-- พื้นที่เนื้อหาของแท็บ (ด้าน "ขวา" ของแถบแท็บแนวตั้ง)
 local contentFrame = Instance.new("Frame")                      -- สร้าง Frame พื้นที่เนื้อหา
-contentFrame.Size = UDim2.new(1, -16, 1, -92)                   -- เว้นขอบ 8px รอบด้าน
-contentFrame.Position = UDim2.new(0, 8, 0, 84)                  -- ใต้แถบแท็บ
+contentFrame.Size = UDim2.new(1, -132, 1, -56)                  -- เว้นแถบซ้าย 112px + ขอบรอบพื้นที่เนื้อหา
+contentFrame.Position = UDim2.new(0, 126, 0, 48)                -- อยู่ทางขวาของแถบแท็บแนวตั้ง
 contentFrame.BackgroundTransparency = 1                         -- ไม่มีพื้นหลัง
 contentFrame.Parent = mainWindow                                -- ใส่เข้าหน้าต่างหลัก
 
-local tabNames = { "🏠 หน้าหลัก", "🎭 ตัวละคร", "🧭 สร้าง/วาร์ป", "🎯 Aimbot", "⚡ ประสิทธิภาพ" } -- ชื่อแท็บทั้ง 5 (มีไอคอนอีโมจินำหน้า)
+local tabNames = { "🏠 หน้าหลัก", "🎭 ตัวละคร", "🧭 สร้าง/วาร์ป", "🎯 ต่อสู้", "⚡ ประสิทธิภาพ" } -- ชื่อแท็บทั้ง 5 เรียงจากบนลงล่าง (แท็บ "ต่อสู้" = Aimbot + ESP อยู่รวมกัน)
 local tabButtons = {}                                           -- เก็บปุ่มแท็บทั้งหมด
 local tabFrames = {}                                            -- เก็บ Frame เนื้อหาของแต่ละแท็บ
 local currentTab = 1                                            -- แท็บที่เปิดอยู่ปัจจุบัน
@@ -1063,11 +1226,11 @@ end
 for index, name in ipairs(tabNames) do                          -- วนชื่อแท็บทั้งหมด
 	local tabIndex = index                                      -- คัดลอกค่าลำดับไว้ในตัวแปรท้องถิ่น (กัน closure จับค่าผิด)
 	local tabButton = Instance.new("TextButton")                -- สร้างปุ่มแท็บ
-	tabButton.Size = UDim2.new(0, 94, 1, 0)                     -- กว้าง 94px เต็มความสูงแถบ (5 แท็บ × 94 + ช่องว่าง 4×4 = 486 พอดีแถบ)
+	tabButton.Size = UDim2.new(1, -8, 0, 34)                    -- กว้างเท่าแถบซ้าย - 8px สูง 34px (ปุ่มแนวตั้งเต็มความกว้าง)
 	tabButton.BackgroundColor3 = COLOR_BTN                      -- สีพื้นปกติ
 	tabButton.TextColor3 = COLOR_TEXT                           -- สีตัวอักษร
 	tabButton.Font = FONT                                       -- ฟอนต์
-	tabButton.TextSize = 12                                     -- ขนาดตัวอักษร (12 พอให้ไอคอน+ชื่อแท็บยาวสุดพอดีความกว้าง 94px)
+	tabButton.TextSize = 12                                     -- ขนาดตัวอักษร (12 พอให้ไอคอน+ชื่อแท็บยาวสุดพอดีความกว้างแถบ 112px)
 	tabButton.Text = name                                       -- ชื่อแท็บ
 	tabButton.AutoButtonColor = false                           -- ปิดเอฟเฟกต์กดของ Roblox
 	addCorner(tabButton, 6)                                     -- ทำมุมโค้ง
@@ -1088,48 +1251,48 @@ local homeTab = tabFrames[1]                                   -- อ้าง�
 ui.posLabel = makeLabel("พิกัดตัวละคร: (ยังไม่มีตัวละคร)", homeTab, UDim2.new(1, 0, 0, 26), UDim2.new(0, 4, 0, 8))            -- ป้ายพิกัดตัวละครแบบเรียลไทม์
 ui.fpsLabel = makeLabel("FPS: -- | Ping: -- ms", homeTab, UDim2.new(1, 0, 0, 26), UDim2.new(0, 4, 0, 38))                      -- ป้าย FPS/Ping
 ui.timeLabel = makeLabel("เวลาที่เปิดใช้งาน: 00:00:00", homeTab, UDim2.new(1, 0, 0, 26), UDim2.new(0, 4, 0, 68))              -- ป้ายเวลาที่เปิดใช้งาน
-ui.statusLabel = makeLabel(statusString(), homeTab, UDim2.new(1, 0, 0, 40), UDim2.new(0, 4, 0, 98))                            -- ป้ายสถานะโหมดต่าง ๆ (สูง 40px เพื่อให้ข้อความยาวไม่ถูกตัด)
-makeLabel("🎮 คีย์ลัดที่เหลือ: B = เสก Part ทดสอบ | T = วาร์ปไปจุดที่เมาส์ | F3 = วิ่งเร็ว", homeTab, UDim2.new(1, 0, 0, 40), UDim2.new(0, 4, 0, 140), COLOR_DIM, 13) -- คำอธิบายคีย์ลัด
-makeLabel("💡 วิธีใช้: ปุ่ม ☰ เปิดเมนู / ปุ่ม ✕ ปิดเมนู | ลากแถบชื่อด้านบนเพื่อย้ายหน้าต่าง | ทุกฟังก์ชันสั่งได้จากปุ่มในเมนู", homeTab, UDim2.new(1, 0, 0, 60), UDim2.new(0, 4, 0, 186), COLOR_DIM, 13) -- คำอธิบายการใช้งาน
+ui.statusLabel = makeLabel(statusString(), homeTab, UDim2.new(1, 0, 0, 56), UDim2.new(0, 4, 0, 98))                            -- ป้ายสถานะโหมดต่าง ๆ (สูง 56px พอให้ข้อความยาว 3 บรรทัดไม่ถูกตัด)
+makeLabel("🎮 คีย์ลัดที่เหลือ: B = เสก Part ทดสอบ | T = วาร์ปไปจุดที่เมาส์ | F3 = วิ่งเร็ว", homeTab, UDim2.new(1, 0, 0, 44), UDim2.new(0, 4, 0, 160), COLOR_DIM, 13) -- คำอธิบายคีย์ลัด
+makeLabel("💡 วิธีใช้: ปุ่ม ☰ เปิดเมนู / ปุ่ม ✕ ปิดเมนู | ลากแถบชื่อด้านบนเพื่อย้ายหน้าต่าง | เลือกโหมดได้จากแถบเมนูด้านซ้าย", homeTab, UDim2.new(1, 0, 0, 70), UDim2.new(0, 4, 0, 210), COLOR_DIM, 13) -- คำอธิบายการใช้งาน
 
--- ===================== เนื้อหาแท็บ 2: ตัวละคร =====================
+-- ===================== เนื้อหาแท็บ 2: ตัวละคร (การเคลื่อนที่ทั้งหมดอยู่แท็บเดียว) =====================
 local charTab = tabFrames[2]                                   -- อ้างอิง Frame ของแท็บตัวละคร
-local halfBtnSize = UDim2.new(0.5, -6, 0, 38)                  -- ขนาดปุ่มครึ่งความกว้าง
-makeToggleButton("🏃 โหมดวิ่งเร็ว", charTab, halfBtnSize, UDim2.new(0, 0, 0, 8),        -- ปุ่ม toggle วิ่งเร็ว
+local fullBtnSize = UDim2.new(1, 0, 0, 38)                     -- ขนาดปุ่มเต็มความกว้าง (จัดเรียงแนวตั้ง อ่านง่ายไม่ตัดข้อความ)
+makeToggleButton("🏃 โหมดวิ่งเร็ว", charTab, fullBtnSize, UDim2.new(0, 0, 0, 8),        -- ปุ่ม toggle วิ่งเร็ว
 	function() return speedMode end,                            -- เช็คสถานะ: speedMode
 	function() setSpeedMode(not speedMode) end)                 -- กดแล้ว: สลับสถานะวิ่งเร็ว
-makeToggleButton("👻 NoClip (ทะลุกำแพง)", charTab, halfBtnSize, UDim2.new(0.5, 6, 0, 8), -- ปุ่ม toggle NoClip
+makeToggleButton("👻 NoClip (ทะลุกำแพง)", charTab, fullBtnSize, UDim2.new(0, 0, 0, 52), -- ปุ่ม toggle NoClip
 	function() return noClipEnabled end,                        -- เช็คสถานะ: noClipEnabled
 	function() setNoClip(not noClipEnabled) end)                -- กดแล้ว: สลับสถานะ NoClip
-makeToggleButton("🚀 โหมดบิน (WASD)", charTab, halfBtnSize, UDim2.new(0, 0, 0, 52), -- ปุ่ม toggle บิน (สั้นลงให้พอดีคอลัมน์ — Space/Ctrl ดูได้จากคำอธิบายด้านล่าง)
+makeToggleButton("🚀 โหมดบิน (WASD)", charTab, fullBtnSize, UDim2.new(0, 0, 0, 96), -- ปุ่ม toggle บิน (Space ขึ้น / Ctrl ลง ดูได้จากคำอธิบายด้านล่าง)
 	function() return flyEnabled end,                           -- เช็คสถานะ: flyEnabled
 	function() setFly(not flyEnabled) end)                      -- กดแล้ว: สลับสถานะบิน
-makeButton("❤️ รีเลือดเต็ม", charTab, halfBtnSize, UDim2.new(0.5, 6, 0, 52), function()   -- ปุ่มรีเลือดเต็ม
+makeButton("❤️ รีเลือดเต็ม", charTab, fullBtnSize, UDim2.new(0, 0, 0, 140), function() -- ปุ่มรีเลือดเต็ม
 	if humanoid then humanoid.Health = humanoid.MaxHealth end  -- ตั้งเลือดปัจจุบันให้เท่ากับหลอดสูงสุด
 end)
 -- สไลเดอร์ปรับความเร็ววิ่ง (ลากเลื่อนได้ 16-300) — ปรับแล้วมีผลทันทีถ้าเปิดโหมดวิ่งเร็วอยู่
-local walkSlider = makeSlider(charTab, 98, "🏃 ความเร็ววิ่ง", 16, 300, walkSpeedValue, function(newValue)
+local walkSlider = makeSlider(charTab, 186, "🏃 ความเร็ววิ่ง", 16, 300, walkSpeedValue, function(newValue)
 	walkSpeedValue = newValue                                     -- เก็บค่าใหม่ลงตัวแปรหลัก
 	if speedMode and humanoid then humanoid.WalkSpeed = walkSpeedValue end -- ใช้ค่าใหม่ทันทีถ้าโหมดวิ่งเร็วเปิดอยู่
 end)
 ui.walkSpeedLabel = walkSlider.caption                            -- ให้ refreshToggles อัปเดตป้ายเดียวกับสไลเดอร์
 -- สไลเดอร์ปรับความเร็วบิน (ลากเลื่อนได้ 25-500) — ใช้ทันทีทุกเฟรมที่เปิดโหมดบินอยู่
-local flySlider = makeSlider(charTab, 150, "🚀 ความเร็วบิน", 25, 500, flySpeed, function(newValue)
+local flySlider = makeSlider(charTab, 238, "🚀 ความเร็วบิน", 25, 500, flySpeed, function(newValue)
 	flySpeed = newValue                                           -- เก็บค่าใหม่ (ลูปบินอ่านค่านี้ทุกเฟรมอยู่แล้ว)
 end)
 ui.flySpeedLabel = flySlider.caption                              -- ให้ refreshToggles อัปเดตป้ายเดียวกับสไลเดอร์
-makeLabel("💡 เคล็ดลับ: ลากจุดกลมบนแถบเพื่อปรับค่า | เปิดโหมดบินแล้วใช้ WASD บินตามทิศกล้อง | Space ขึ้น | Ctrl ลง", charTab, UDim2.new(1, 0, 0, 60), UDim2.new(0, 4, 0, 204), COLOR_DIM, 13) -- คำอธิบายการใช้งาน
+makeLabel("💡 เคล็ดลับ: ลากจุดกลมบนแถบเพื่อปรับค่า | เปิดโหมดบินแล้วใช้ WASD บินตามทิศกล้อง | Space ขึ้น | Ctrl ลง", charTab, UDim2.new(1, 0, 0, 76), UDim2.new(0, 4, 0, 292), COLOR_DIM, 13) -- คำอธิบายการใช้งาน
 
 -- ===================== เนื้อหาแท็บ 3: สร้างของ & วาร์ป =====================
 local spawnTab = tabFrames[3]                                  -- อ้างอิง Frame ของแท็บสร้างของ/วาร์ป
 makeButton("🧱 เสก Part ทดสอบ (B)", spawnTab, UDim2.new(0.5, -6, 0, 34), UDim2.new(0, 0, 0, 6), spawnTestPart) -- ปุ่มเสก Part แดง 4x4x4
-makeButton("📍 วาร์ปไปจุดที่เมาส์ (T)", spawnTab, UDim2.new(0.5, -6, 0, 34), UDim2.new(0.5, 6, 0, 6), teleportToMouse) -- ปุ่มวาร์ปไปจุดที่ชี้
+makeButton("📍 วาร์ปไปจุดที่ชี้ (T)", spawnTab, UDim2.new(0.5, -6, 0, 34), UDim2.new(0.5, 6, 0, 6), teleportToMouse) -- ปุ่มวาร์ปไปจุดที่ชี้
 makeButton("🧹 ล้างของที่เสกทั้งหมด", spawnTab, UDim2.new(0.5, -6, 0, 34), UDim2.new(0, 0, 0, 44), cleanUp)   -- ปุ่มลบ Part/ประตูที่เสก
-makeButton("⭐ บันทึก Waypoint ตำแหน่งนี้", spawnTab, UDim2.new(0.5, -6, 0, 34), UDim2.new(0.5, 6, 0, 44), saveWaypoint) -- ปุ่มบันทึกตำแหน่งปัจจุบัน
+makeButton("⭐ บันทึก Waypoint", spawnTab, UDim2.new(0.5, -6, 0, 34), UDim2.new(0.5, 6, 0, 44), saveWaypoint) -- ปุ่มบันทึกตำแหน่งปัจจุบัน
 makeLabel("— 🌀 ระบบประตูวาร์ป (Auto Gate) —", spawnTab, UDim2.new(1, 0, 0, 22), UDim2.new(0, 4, 0, 84), COLOR_ACCENT, 14) -- หัวข้อระบบประตูวาร์ป
 ui.point1Label = makeLabel("Point 1: (ยังไม่ได้บันทึก)", spawnTab, UDim2.new(1, 0, 0, 20), UDim2.new(0, 4, 0, 108), COLOR_DIM, 13) -- ป้ายแสดง Point 1
 ui.point2Label = makeLabel("Point 2: (ยังไม่ได้บันทึก)", spawnTab, UDim2.new(1, 0, 0, 20), UDim2.new(0, 4, 0, 128), COLOR_DIM, 13) -- ป้ายแสดง Point 2
-makeButton("🚩 บันทึก Point 1 (จากที่ยืน)", spawnTab, UDim2.new(0.5, -6, 0, 34), UDim2.new(0, 0, 0, 152), function() -- ปุ่มบันทึกจุดเริ่มต้นประตู
+makeButton("🚩 บันทึก Point 1", spawnTab, UDim2.new(0.5, -6, 0, 34), UDim2.new(0, 0, 0, 152), function() -- ปุ่มบันทึกจุดเริ่มต้นประตู (จากที่ยืน)
 	if rootPart then                                            -- ถ้ามีตัวละคร
 		point1 = rootPart.CFrame                                -- เก็บพิกัด+ทิศทางปัจจุบันเป็น Point 1
 		print("[DevUtilityV2] บันทึก Point 1 ที่ " .. formatVector3(point1.Position))
@@ -1138,7 +1301,7 @@ makeButton("🚩 บันทึก Point 1 (จากที่ยืน)", spaw
 		print("[DevUtilityV2] ยังไม่มีตัวละคร")
 	end
 end)
-makeButton("🌀 สร้างประตู (Point 2 + สร้าง)", spawnTab, UDim2.new(0.5, -6, 0, 34), UDim2.new(0.5, 6, 0, 152), function() -- ปุ่มสร้างประตูวาร์ป
+makeButton("🌀 สร้างประตูวาร์ป", spawnTab, UDim2.new(0.5, -6, 0, 34), UDim2.new(0.5, 6, 0, 152), function() -- ปุ่มสร้างประตู (บันทึก Point 2 + เสกประตู)
 	buildGate()                                                 -- บันทึก Point 2 + เสกประตูที่ Point 1 + พิมพ์ซอร์สโค้ด
 	refreshToggles()                                            -- อัปเดตป้าย Point 2
 end)
@@ -1189,19 +1352,20 @@ rebuildWaypointList = function()
 	end
 end
 
--- ===================== เนื้อหาแท็บ 4: Aimbot (ล็อกเป้าหมาย) =====================
-local aimTab = tabFrames[4]                                     -- อ้างอิง Frame ของแท็บ Aimbot
-makeToggleButton("🎯 Aimbot (ล็อกเป้าหมาย)", aimTab, UDim2.new(1, 0, 0, 38), UDim2.new(0, 0, 0, 6), -- ปุ่ม toggle เปิด/ปิด Aimbot
+-- ===================== เนื้อหาแท็บ 4: ต่อสู้ (Aimbot + ESP ศัตรู — รวมอยู่แท็บเดียว) =====================
+local aimTab = tabFrames[4]                                     -- อ้างอิง Frame ของแท็บต่อสู้
+makeLabel("— 🎯 Aimbot (ยิงในวง = โดน) —", aimTab, UDim2.new(1, 0, 0, 18), UDim2.new(0, 4, 0, 0), COLOR_ACCENT, 14) -- หัวข้อโซน Aimbot
+makeToggleButton("🎯 Aimbot (ยิงในวง = โดน)", aimTab, UDim2.new(1, 0, 0, 36), UDim2.new(0, 0, 0, 22), -- ปุ่ม toggle เปิด/ปิด Aimbot (ยิงเท่านั้น ไม่ล็อกกล้อง)
 	function() return aimbotEnabled end,                          -- เช็คสถานะ: aimbotEnabled
 	function() setAimbot(not aimbotEnabled) end)                  -- กดแล้ว: สลับสถานะ Aimbot
-makeSlider(aimTab, 50, "🎯 FOV (องศา)", 5, 120, aimFov, function(newValue) -- สไลเดอร์มุมมองจับเป้า 5-120 องศา
+makeSlider(aimTab, 62, "🎯 FOV (องศา)", 5, 120, aimFov, function(newValue) -- สไลเดอร์มุมมองจับเป้า 5-120 องศา
 	aimFov = newValue                                           -- เก็บค่าใหม่
 	updateFovCircle()                                           -- อัปเดตขนาดวงกลม FOV กลางจอทันที
 end)
-makeSlider(aimTab, 102, "📏 ระยะเล็ง (สตั๊ด)", 10, 1000, aimRange, function(newValue) -- สไลเดอร์ระยะจับเป้า 10-1000 สตั๊ด
+makeSlider(aimTab, 110, "📏 ระยะเล็ง (สตั๊ด)", 10, 1000, aimRange, function(newValue) -- สไลเดอร์ระยะจับเป้า 10-1000 สตั๊ด
 	aimRange = newValue                                         -- เก็บค่าใหม่ (ลูปเล็งอ่านค่านี้ทุกเฟรมอยู่แล้ว)
 end)
-makeSlider(aimTab, 154, "⚡ ความไว (0-100)", 1, 100, aimSmooth, function(newValue) -- สไลเดอร์ความไวในการเลื่อนกล้อง
+makeSlider(aimTab, 158, "⚡ ความไว (0-100)", 1, 100, aimSmooth, function(newValue) -- สไลเดอร์ความไวในการเลื่อนกล้อง
 	aimSmooth = newValue                                        -- เก็บค่าใหม่ (มาก = ตามเร็ว, น้อย = นุ่ม)
 end)
 ui.aimPartButton = makeButton("🎯 จุดเล็ง: ศีรษะ (Head)", aimTab, UDim2.new(0.5, -6, 0, 34), UDim2.new(0, 0, 0, 206), function() -- ปุ่มเลือกจุดเล็ง (กดเพื่อวน)
@@ -1211,7 +1375,11 @@ end)
 makeToggleButton("🔍 มองเห็นเท่านั้น", aimTab, UDim2.new(0.5, -6, 0, 34), UDim2.new(0.5, 6, 0, 206), -- ปุ่ม toggle เช็คการมองเห็น
 	function() return aimVisibility end,                          -- เช็คสถานะ: aimVisibility
 	function() aimVisibility = not aimVisibility end)             -- กดแล้ว: สลับสถานะ
-makeLabel("💡 วิธีใช้: เปิด Aimbot แล้วกล้องจะเลื่อนไปหาเป้าหมายที่อยู่ในวงกลม FOV อัตโนมัติ\n(รายการเป้าหมายอัปเดตใหม่ทุก 0.25 วินาที) — ปุ่มซ้ายเลือกจุดเล็ง / ปุ่มขวาเลือกโหมดมองทะลุ\n* สำหรับทดสอบระบบเล็งในเกมของตัวเอง ทำงานฝั่ง Client เท่านั้น", aimTab, UDim2.new(1, 0, 0, 74), UDim2.new(0, 4, 0, 250), COLOR_DIM, 12) -- คำอธิบายการใช้งาน Aimbot
+makeLabel("— 👁️ ESP ศัตรู (เรียลไทม์) —", aimTab, UDim2.new(1, 0, 0, 18), UDim2.new(0, 4, 0, 244), COLOR_ACCENT, 14) -- หัวข้อโซน ESP
+makeToggleButton("👁️ ESP ศัตรู (เรียลไทม์)", aimTab, UDim2.new(1, 0, 0, 36), UDim2.new(0, 0, 0, 266), -- ปุ่ม toggle เปิด/ปิด ESP (ไฮไลต์ศัตรูทะลุกำแพง)
+	function() return espEnabled end,                             -- เช็คสถานะ: espEnabled
+	function() setESP(not espEnabled) end)                        -- กดแล้ว: สลับสถานะ ESP
+makeLabel("💡 Aimbot: ไม่ล็อกกล้อง — สแนปเฉพาะตอนกดยิง ปล่อยเมาส์ = คืนกล้อง | ซ้ายเลือกจุดเล็ง / ขวามองทะลุ\n💡 ESP: ไฮไลต์+ชื่อ/ระยะ เฉพาะ 'ศัตรู' เรียลไทม์ ไม่ขึ้นเพื่อนร่วมทีม | ศัตรู = คนละทีม (ไม่มีทีมทั้งคู่ = ถือเป็นศัตรู)", aimTab, UDim2.new(1, 0, 0, 68), UDim2.new(0, 4, 0, 306), COLOR_DIM, 12) -- คำอธิบายการใช้งาน Aimbot + ESP
 
 -- ===================== เนื้อหาแท็บ 5: ประสิทธิภาพ (Boost FPS) =====================
 local perfTab = tabFrames[5]                                   -- อ้างอิง Frame ของแท็บประสิทธิภาพ
@@ -1350,8 +1518,13 @@ RunService.Heartbeat:Connect(function()
 		end
 	end
 	-- 2) คงค่าโหมดวิ่งเร็วไว้ (กันค่าถูกเขียนทับโดยสคริปต์อื่นในเกม หรือตอนตัวละครเพิ่งเกิด/respawn)
-	if speedMode and humanoid and humanoid.Parent and humanoid.WalkSpeed ~= walkSpeedValue then
-		humanoid.WalkSpeed = walkSpeedValue                       -- เขียนค่าความเร็วกลับทุกครั้งที่พบว่าถูกแก้
+	if speedMode then
+		if not humanoid or not humanoid.Parent then              -- ถ้าตัวแปร humanoid ยังว่างหรือใช้ไม่ได้
+			humanoid = character and character:FindFirstChildOfClass("Humanoid") -- ลองหา Humanoid ใหม่จากตัวละครปัจจุบันเอง
+		end
+		if humanoid and humanoid.WalkSpeed ~= walkSpeedValue then -- ถ้าเจอ Humanoid และค่าปัจจุบันไม่ตรงค่าที่ตั้งไว้
+			humanoid.WalkSpeed = walkSpeedValue                   -- เขียนค่าความเร็วกลับทุกครั้งที่พบว่าถูกแก้
+		end
 	end
 	-- 3) อัปเดตข้อมูล Real-time บนแท็บหน้าหลัก (ถี่ประมาณ 4 ครั้ง/วินาที พอให้อ่านทัน)
 	local now = os.clock()                                       -- อ่านเวลาปัจจุบัน
@@ -1367,7 +1540,9 @@ RunService.Heartbeat:Connect(function()
 		if ui.timeLabel then                                     -- อัปเดตป้ายเวลาที่เปิดใช้งาน
 			ui.timeLabel.Text = "เวลาที่เปิดใช้งาน: " .. formatDuration(os.clock() - scriptStartTime) -- เวลาที่ผ่านไปตั้งแต่สคริปต์เริ่มรัน
 		end
+		if ui.statusLabel then ui.statusLabel.Text = statusString() end -- อัปเดตแถบสถานะทุก 0.25 วิ (แสดง WalkSpeed จริง ไว้เช็คว่าค่าถูกเขียนทับไหม)
 		if aimbotEnabled then refreshAimCandidates() end         -- สแกนรายการเป้าหมายใหม่ทุก 0.25 วินาที ระหว่างเปิด Aimbot
+		if espEnabled then refreshESP() end                      -- อัปเดต ESP ศัตรูทุก 0.25 วินาที (เพิ่ม/ถอด/อัปเดตชื่อ+ระยะ ตามทีมล่าสุด)
 	end
 end)
 
