@@ -1,0 +1,1044 @@
+--[[
+	====================================================================
+	Dev Utility Suite V2 — เครื่องมือผู้ช่วยพัฒนาเกม (เวอร์ชันเมนู GUI ทั้งหมด)
+	ประเภทไฟล์ : LocalScript  (สร้างใหม่ทั้งหมด ไม่แก้ไขและไม่ทับไฟล์เดิม)
+	ตำแหน่ง    : StarterPlayer > StarterPlayerScripts > [ไฟล์นี้]
+
+	สิ่งที่มีในเวอร์ชันนี้
+	--------------------------------------------------------------------
+	* เมนู GUI ภาษาไทย พร้อมปุ่มเปิด/ปิด (ปุ่ม ☰ เปิด / ปุ่ม ✕ ปิด) และลากหน้าต่างได้
+	* 4 แท็บ: [หน้าหลัก] [ตัวละคร] [สร้างของ & วาร์ป] [ประสิทธิภาพ]
+	* ข้อมูล Real-time: พิกัดตัวละคร, FPS, Ping, เวลาที่เปิดใช้งาน, สถานะโหมดต่าง ๆ
+	* ระบบตัวละคร: วิ่งเร็ว (ปรับค่าได้), NoClip, โหมดบิน (ปรับความเร็วได้), รีเลือดเต็ม
+	* ระบบสร้างของ/วาร์ป: เสก Part ทดสอบ, วาร์ปไปจุดที่เมาส์, ประตูวาร์ปอัตโนมัติ (Auto Gate)
+	  Waypoint หลายจุดพร้อมลิสต์ใน GUI (บันทึก/วาร์ป/ลบรายจุด), ล้างของที่เสกทั้งหมด
+	* ระบบ Boost FPS: ลดคุณภาพกราฟฟิก, ปิดเอฟเฟก Lighting, ล้างหมอก, ปิด Particle/Beam/Trail
+	  ทั่วแมป (เฉพาะฝั่ง Client) และคืนสภาพเดิมได้เมื่อกดปิด
+
+	คีย์ลัดที่เหลืออยู่ (เหลือเฉพาะ 3 ตัว ตามที่ผู้ใช้ระบุ ส่วนอื่นใช้ผ่านเมนู GUI)
+	--------------------------------------------------------------------
+	B  = เสก Part สีแดง 4x4x4 ตรงหน้าตัวละคร
+	T  = วาร์ปตัวละครไปยังจุดที่เมาส์ชี้
+	F3 = สลับเปิด/ปิดโหมดวิ่งเร็ว
+
+	ข้อจำกัดที่ควรทราบ
+	--------------------------------------------------------------------
+	1) LocalScript สร้าง/แก้ไข Instance ได้เฉพาะ "ฝั่ง Client" เท่านั้น → ของที่เสกและประตู
+	   วาร์ปจึงมีเฉพาะในเครื่องตัวเอง (เหมาะกับทดสอบใน Studio) ส่วนซอร์สสคริปต์วาร์ปฝั่ง
+	   เซิร์ฟเวอร์จะถูกพิมพ์ลง Output ให้คัดลอกไปติดตั้งเองในเกมของคุณ
+	2) การเขียน Script.Source ถูกจำกัดด้วยสิทธิ์ Plugin → ถ้าเซ็ตไม่ได้จะเก็บซอร์สไว้ใน
+	   StringValue ภายในประตู และพิมพ์ลง Output ให้แทน
+	3) โหมดบิน/วาร์ป/เดินทะลุ เป็นเครื่องมือทดสอบสำหรับเกมของตัวเองใน Studio เท่านั้น
+	====================================================================
+]]
+
+-- ===================== Services (ระบบของ Roblox ที่ต้องเรียกใช้) =====================
+local Players = game:GetService("Players")                      -- ใช้หาผู้เล่น (ตัวเราเอง) และ Ping
+local UserInputService = game:GetService("UserInputService")    -- ใช้ดักคีย์ลัดและจัดการการลากหน้าต่าง
+local RunService = game:GetService("RunService")                -- ใช้รันโค้ดทุกเฟรม (HUD/บิน/NoClip)
+local TweenService = game:GetService("TweenService")            -- ใช้ทำเอฟเฟกต์ Fade หน้าจอดำตอนวาร์ป
+local Lighting = game:GetService("Lighting")                    -- ใช้จัดการหมอกและเอฟเฟกตอนเปิด Boost FPS
+
+-- ===================== ตัวแปรหลักของผู้เล่น =====================
+local player = Players.LocalPlayer                              -- LocalPlayer = ผู้เล่นที่รันสคริปต์นี้
+local playerGui = player:WaitForChild("PlayerGui")              -- PlayerGui ที่จะผูก GUI ทั้งหมดไว้
+local scriptStartTime = os.clock()                              -- เวลาที่เริ่มรันสคริปต์ (ใช้แสดง "เวลาที่เปิดใช้งาน")
+
+-- ตัวแปรอ้างอิงตัวละคร (อัปเดตใหม่ทุกครั้งที่ตัวละครเกิด)
+local character = nil                                            -- Model ตัวละครปัจจุบัน
+local humanoid = nil                                             -- Humanoid ใช้สั่ง WalkSpeed/Health/AutoRotate
+local rootPart = nil                                             -- HumanoidRootPart ใช้อ่าน/เขียนพิกัด
+
+-- สถานะโหมดต่าง ๆ (true = เปิด, false = ปิด)
+local speedMode = false                                          -- สถานะโหมดวิ่งเร็ว
+local noClipEnabled = false                                      -- สถานะโหมด NoClip (เดินทะลุ)
+local flyEnabled = false                                         -- สถานะโหมดบิน
+local walkSpeedValue = 50                                        -- ค่าความเร็ววิ่งที่ใช้เมื่อเปิดโหมดวิ่งเร็ว
+local flySpeed = 100                                             -- ค่าความเร็วบิน (ปรับด้วยปุ่ม +/- ในเมนู)
+local WALK_DEFAULT = 16                                          -- ค่าความเร็ววิ่งปกติของ Roblox (ใช้ตอนปิดโหมด)
+local flyConnection = nil                                        -- connection ของลูปบิน (ใช้ Disconnect เมื่อปิด)
+
+-- สถานะของ Teleport Builder และ Waypoint
+local point1 = nil                                               -- CFrame ของจุดเริ่มต้น/Entrance ของประตูวาร์ป
+local point2 = nil                                               -- CFrame ของจุดปลายทาง/Exit ของประตูวาร์ป
+local waypoints = {}                                             -- ตารางเก็บ Waypoint หลายจุด { name, cFrame }
+local waypointCounter = 0                                        -- ตัวนับชื่อ Waypoint ไม่ให้ชื่อซ้ำ
+
+-- ตารางเก็บสิ่งที่เสกออกมา เพื่อให้ปุ่ม "ล้างของที่เสก" ทำงานได้
+local spawnedParts = {}                                          -- Part ทดสอบที่เสกด้วยปุ่ม B
+local gates = {}                                                 -- ประตูวาร์ปที่สร้างจากเมนู (เก็บข้อมูล + state)
+local spawnCounter = 0                                           -- ตัวนับชื่อ Part ทดสอบ
+
+-- ตัวแปรระบบ Boost FPS (nil = ยังไม่ได้เปิด / ตาราง = เก็บค่าเดิมไว้คืนสภาพ)
+local boostBackup = nil
+
+-- ตัวแปร FPS (นับจำนวนเฟรมต่อวินาที)
+local fps = 0
+local frameCount = 0
+local lastFpsTime = os.clock()
+
+-- ตัวแปรส่วน GUI (ประกาศไว้ก่อนเพื่อให้ฟังก์ชันอื่นเรียกใช้ได้)
+local ui = {}                                                    -- เก็บ reference ของ UI ที่ต้องอัปเดตภายหลัง
+local toggleRegistry = {}                                        -- รายการปุ่ม toggle ทั้งหมด เพื่อ refresh พร้อมกัน
+local waypointListFrame = nil                                    -- ScrollingFrame ของลิสต์ Waypoint (กำหนดค่าตอนสร้าง GUI)
+local refreshToggles                                             -- forward: ฟังก์ชันอัปเดตป้าย UI ทุกจุด (กำหนดค่าทีหลัง)
+local rebuildWaypointList                                        -- forward: ฟังก์ชันสร้างลิสต์ Waypoint ใหม่ (กำหนดค่าทีหลัง)
+
+-- ===================== ฟังก์ชันช่วยเหลือ (Helpers) =====================
+
+-- ปัดเศษตัวเลขให้เหลือทศนิยม 2 ตำแหน่ง เพื่อให้ค่าที่พิมพ์/แสดงอ่านง่าย
+local function round2(n)
+	return math.round(n * 100) / 100                            -- คูณ 100 → ปัดเศษ → หาร 100 คืนเป็นทศนิยม 2 ตำแหน่ง
+end
+
+-- แปลง Vector3 เป็นข้อความรูปแบบ Vector3.new(X, Y, Z) เพื่อแสดงผล/พิมพ์ลง Output ให้ก๊อปปี้เป็นโค้ดได้
+local function formatVector3(v)
+	return "Vector3.new("                                        -- เริ่มด้วยข้อความ Vector3.new(
+		.. tostring(round2(v.X)) .. ", "                         -- ตามด้วยค่า X ปัดเศษแล้ว
+		.. tostring(round2(v.Y)) .. ", "                         -- ตามด้วยค่า Y ปัดเศษแล้ว
+		.. tostring(round2(v.Z)) .. ")"                          -- ตามด้วยค่า Z ปัดเศษแล้ว + ปิดวงเล็บ
+end
+
+-- แปลงจำนวนวินาทีเป็นข้อความ HH:MM:SS สำหรับแสดงเวลาที่เปิดใช้งาน
+local function formatDuration(totalSeconds)
+	local hours = math.floor(totalSeconds / 3600)               -- หาร 3600 เอาส่วนชั่วโมง
+	local minutes = math.floor((totalSeconds % 3600) / 60)       -- เอาเศษส่วนที่เหลือไปหาร 60 เพื่อหาส่วนนาที
+	local seconds = math.floor(totalSeconds % 60)                -- เอาเศษวินาทีที่เหลือ
+	return string.format("%02d:%02d:%02d", hours, minutes, seconds) -- คืนข้อความรูปแบบ 00:00:00
+end
+
+-- ยิง Ray จากกล้องผ่านตำแหน่งเมาส์ เพื่อหา "จุดที่เมาส์ชี้" บนวัตถุในโลก (คืน nil ถ้าไม่โดนอะไร)
+local function getMouseHit()
+	local cam = workspace.CurrentCamera                          -- ดึงกล้องปัจจุบันใหม่ทุกครั้ง
+	if not cam then return nil end                              -- ยังไม่มีกล้อง → คืน nil
+	local mouseLocation = UserInputService:GetMouseLocation()   -- อ่านตำแหน่งเมาส์บนหน้าจอ (หน่วย Pixel)
+	local ray = cam:ViewportPointToRay(mouseLocation.X, mouseLocation.Y) -- แปลงตำแหน่งหน้าจอเป็น Ray จากกล้อง
+	local params = RaycastParams.new()                          -- สร้างตั้งค่าการยิง Ray
+	params.FilterType = Enum.RaycastFilterType.Exclude          -- ใช้โหมด "ยกเว้น" Instance ที่ระบุ
+	params.FilterDescendantsInstances = { character }           -- ยกเว้นตัวละครตัวเอง กันชี้โดนตัวเรา
+	return workspace:Raycast(ray.Origin, ray.Direction * 5000, params) -- ยิง Ray ไกล 5,000 สตั๊ด แล้วคืนผลที่เจอ
+end
+
+-- สร้างข้อความสรุปสถานะโหมดต่าง ๆ สำหรับแสดงบน HUD (ใช้ทั้งใน GUI และอัปเดตอัตโนมัติ)
+local function statusString()
+	return string.format(                                        -- ต่อข้อความหลายส่วน
+		"วิ่งเร็ว: %s | NoClip: %s | บิน: %s | Boost FPS: %s",  -- รูปแบบข้อความสรุป
+		speedMode and "เปิด" or "ปิด",                           -- สถานะวิ่งเร็ว
+		noClipEnabled and "เปิด" or "ปิด",                       -- สถานะ NoClip
+		flyEnabled and "เปิด" or "ปิด",                          -- สถานะบิน
+		boostBackup and "เปิด" or "ปิด"                          -- สถานะ Boost FPS
+	)
+end
+
+-- ===================== จัดการตัวละคร (รันใหม่ทุกครั้งที่ตัวละครเกิด) =====================
+local function onCharacterAdded(newCharacter)
+	character = newCharacter                                      -- เก็บ Model ตัวละครตัวใหม่
+	rootPart = newCharacter:WaitForChild("HumanoidRootPart", 10)  -- รอ Part หลักของตัวละคร (สูงสุด 10 วิ)
+	humanoid = newCharacter:WaitForChild("Humanoid", 10)          -- รอ Humanoid (สูงสุด 10 วิ)
+	if humanoid then                                             -- ถ้าหา Humanoid เจอ
+		humanoid.WalkSpeed = WALK_DEFAULT                         -- คืนค่าความเร็ววิ่งเป็นค่าปกติของ Roblox
+		humanoid.AutoRotate = not flyEnabled                      -- ถ้ากำลังบินอยู่ให้ปิดการหมั่นหน้าอัตโนมัติ
+	end
+	speedMode = false                                            -- รีเซ็ตสถานะวิ่งเร็วไม่ให้ค้างข้ามการเกิดใหม่
+	-- * NoClip/บิน ไม่รีเซ็ต เพราะเป็นสวิตช์ที่ผู้ใช้เปิดไว้ ตัวละครใหม่จะยังคงโหมดเดิม
+	if refreshToggles then refreshToggles() end                  -- อัปเดตป้าย UI ให้ตรงกับสถานะใหม่
+end
+
+player.CharacterAdded:Connect(onCharacterAdded)                 -- ผูกฟังก์ชันกับอีเวนต์ "ตัวละครเกิดใหม่"
+if player.Character then                                        -- ถ้าตัวละครมีอยู่แล้ว (สคริปต์รันช้ากว่า)
+	onCharacterAdded(player.Character)                           -- เรียกใช้ทันทีเพื่ออ้างอิงตัวละครเดิม
+end
+
+-- ===================== เอฟเฟกต์ Fade หน้าจอดำ (ใช้ตอนวาร์ปประตู) =====================
+local FADE_DURATION = 0.3                                        -- ระยะเวลา Fade 1 รอบ (วินาที)
+
+-- ทำเอฟเฟกต์จอดำ → รันงานที่ส่งมา (action) → จอกลับใส → ลบ GUI ทิ้ง
+local function fadeOverlay(action)
+	local gui = Instance.new("ScreenGui")                        -- สร้าง GUI ชั่วคราวสำหรับจอดำ
+	gui.Name = "DevUtilityV2FadeGui"                             -- ตั้งชื่อ GUI
+	gui.IgnoreGuiInset = true                                    -- ครอบคลุมถึงแถบ UI ด้านบน
+	gui.ResetOnSpawn = false                                     -- ไม่ให้หายตอนตัวละครเกิดใหม่
+	gui.DisplayOrder = 1000                                      -- ให้แสดงทับ GUI อื่นทั้งหมด
+	local frame = Instance.new("Frame")                          -- กรอบสีดำเต็มจอ
+	frame.Size = UDim2.fromScale(1, 1)                           -- ครอบคลุมทั้งจอ
+	frame.BackgroundColor3 = Color3.new(0, 0, 0)                 -- สีดำสนิท
+	frame.BackgroundTransparency = 1                             -- เริ่มโปร่งใส 100% (ยังมองไม่เห็น)
+	frame.BorderSizePixel = 0                                    -- ปิดเส้นขอบ
+	frame.Parent = gui                                           -- ใส่ Frame เข้า GUI
+	gui.Parent = playerGui                                       -- ใส่ GUI เข้า PlayerGui ของเรา
+	local fadeIn = TweenService:Create(                          -- สร้าง Tween สำหรับ Fade เข้า
+		frame,
+		TweenInfo.new(FADE_DURATION, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+		{ BackgroundTransparency = 0 }                           -- ค่าปลายทาง = ทึบสนิท (ดำ)
+	)
+	fadeIn:Play()                                                -- เริ่ม Fade เข้า
+	fadeIn.Completed:Wait()                                      -- รอจนจอดำสนิท
+	if action then                                               -- ถ้ามีงานต้องทำระหว่างจอดำ (การวาร์ป)
+		action()                                                 -- รันงานนั้น เช่น ย้ายตัวละคร
+	end
+	local fadeOut = TweenService:Create(                         -- สร้าง Tween สำหรับ Fade ออก
+		frame,
+		TweenInfo.new(FADE_DURATION, Enum.EasingStyle.Quad, Enum.EasingDirection.In),
+		{ BackgroundTransparency = 1 }                           -- ค่าปลายทาง = โปร่งใส 100%
+	)
+	fadeOut:Play()                                               -- เริ่ม Fade ออก
+	fadeOut.Completed:Wait()                                     -- รอจนจอใสสนิท
+	gui:Destroy()                                                -- ลบ GUI ชั่วคราวทิ้ง
+end
+
+-- ===================== ฟังก์ชันระบบตัวละคร =====================
+
+-- โหมดวิ่งเร็ว: เปิด = ตั้ง WalkSpeed เป็นค่าที่ผู้ใช้เลือก + รีเลือดเต็ม / ปิด = คืนค่าปกติ 16
+local function setSpeedMode(enabled)
+	speedMode = enabled                                          -- อัปเดตสถานะโหมดวิ่งเร็ว
+	if not humanoid then return end                             -- ยังไม่มี Humanoid → จบ
+	if speedMode then                                            -- ถ้าเปิดโหมดวิ่งเร็ว
+		humanoid.WalkSpeed = walkSpeedValue                      -- ตั้งความเร็ววิ่งตามค่าที่เลือกในเมนู
+		humanoid.Health = humanoid.MaxHealth                     -- รีเลือดกลับมาเต็มหลอด
+	else                                                         -- ถ้าปิดโหมดวิ่งเร็ว
+		humanoid.WalkSpeed = WALK_DEFAULT                        -- คืนค่าความเร็วเป็นค่าปกติ 16
+	end
+end
+
+-- โหมด NoClip: เปิด = ปิดการชนของตัวละครทุกเฟรม / ปิด = คืนค่าการชน
+local function setNoClip(enabled)
+	noClipEnabled = enabled                                      -- อัปเดตสถานะ NoClip
+	if not noClipEnabled and character then                      -- เพิ่งปิด NoClip และมีตัวละคร
+		for _, part in ipairs(character:GetDescendants()) do      -- วนทุก Instance ในตัวละคร
+			if part:IsA("BasePart") then                          -- เฉพาะ Part ที่มีรูปร่าง
+				part.CanCollide = true                           -- คืนค่าให้ชนของแข็งได้ตามปกติ
+			end
+		end
+	end
+end
+
+-- โหมดบิน: ขยับตัวละครตามกล้องด้วย WASD + Space ขึ้น / Ctrl ลง โดยยกเลิกแรงโน้มถ่วงทุกเฟรม
+local function setFly(enabled)
+	flyEnabled = enabled                                         -- อัปเดตสถานะโหมดบิน
+	if flyConnection then                                        -- ถ้ามีลูปบินค้างอยู่ (จากครั้งก่อน)
+		flyConnection:Disconnect()                               -- ตัดลูปบินเดิมทิ้ง
+		flyConnection = nil                                      -- เคลียร์ค่า connection
+	end
+	if humanoid then                                             -- ถ้ามี Humanoid
+		humanoid.AutoRotate = not flyEnabled                     -- ปิดการหมั่นหน้าอัตโนมัติระหว่างบิน
+	end
+	if flyEnabled and rootPart then                              -- ถ้าเพิ่งเปิดบินและมีตัวละคร
+		flyConnection = RunService.RenderStepped:Connect(function(deltaTime)
+			if not (flyEnabled and rootPart and rootPart.Parent) then return end -- เช็คว่ายังบินอยู่และตัวภาพยังอยู่
+			rootPart.AssemblyLinearVelocity = Vector3.new(0, 0, 0) -- หักล้างแรงทุกอย่าง (รวมแรงโน้มถ่วง) ให้ลอยค้างก่อน
+			local cam = workspace.CurrentCamera                   -- ดึงกล้องปัจจุบัน
+			if not cam then return end                           -- ไม่มีกล้อง → จบเฟรมนี้
+			local moveDirection = Vector3.new(0, 0, 0)           -- ทิศทางที่จะบิน (เริ่มเป็นศูนย์)
+			if UserInputService:IsKeyDown(Enum.KeyCode.W) then moveDirection = moveDirection + cam.CFrame.LookVector end -- บินไปข้างหน้าตามกล้อง
+			if UserInputService:IsKeyDown(Enum.KeyCode.S) then moveDirection = moveDirection - cam.CFrame.LookVector end -- บินถอยหลังตามกล้อง
+			if UserInputService:IsKeyDown(Enum.KeyCode.D) then moveDirection = moveDirection + cam.CFrame.RightVector end -- บินไปขวาตามกล้อง
+			if UserInputService:IsKeyDown(Enum.KeyCode.A) then moveDirection = moveDirection - cam.CFrame.RightVector end -- บินไปซ้ายตามกล้อง
+			if UserInputService:IsKeyDown(Enum.KeyCode.Space) then moveDirection = moveDirection + Vector3.new(0, 1, 0) end -- บินขึ้น
+			if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then moveDirection = moveDirection - Vector3.new(0, 1, 0) end -- บินลง
+			if moveDirection.Magnitude > 0 then                   -- ถ้ามีการกดปุ่มทิศทาง
+				rootPart.CFrame = rootPart.CFrame + moveDirection.Unit * flySpeed * deltaTime -- ขยับตัวละครตามทิศทาง×ความเร็ว×เวลา
+			end
+		end)
+	end
+end
+
+-- ===================== ฟังก์ชันระบบสร้างของและวาร์ป =====================
+
+-- เสก Part สีแดงโปร่งแสง 4x4x4 ตรงหน้าตัวละคร (คีย์ B หรือปุ่มในเมนู)
+local function spawnTestPart()
+	if not rootPart then                                         -- ยังไม่มีตัวละคร
+		print("[DevUtilityV2] ยังไม่มีตัวละคร — ยังเสก Part ไม่ได้")
+		return
+	end
+	spawnCounter = spawnCounter + 1                              -- เพิ่มตัวนับเพื่อตั้งชื่อไม่ให้ซ้ำ
+	local part = Instance.new("Part")                            -- สร้าง Part ใหม่
+	part.Name = "DevTestPart_" .. spawnCounter                   -- ตั้งชื่อพร้อมเลขลำดับ
+	part.Size = Vector3.new(4, 4, 4)                             -- ขนาด 4x4x4 ตามข้อกำหนด
+	part.Color = Color3.fromRGB(255, 0, 0)                       -- สีแดงสด
+	part.Transparency = 0.5                                      -- โปร่งแสง 50%
+	part.Material = Enum.Material.Plastic                         -- วัสดุพลาสติก (ค่าปกติ)
+	part.Anchored = true                                         -- ยึดค้างไว้ไม่ให้ตก
+	part.CFrame = rootPart.CFrame * CFrame.new(0, 0, -5)         -- วางห่างหน้าตัวละคร 5 สตั๊ด (แกน -Z คือด้านหน้า)
+	part.Parent = workspace                                      -- ใส่เข้า Workspace ให้มองเห็น
+	spawnedParts[#spawnedParts + 1] = part                       -- บันทึกลงตารางเพื่อให้ปุ่มล้างทำงานได้
+	print("[DevUtilityV2] เสก Part ทดสอบแล้ว | พิกัด: " .. formatVector3(part.Position))
+end
+
+-- เทมเพลตซอร์สโค้ดสคริปต์วาร์ปฝั่งเซิร์ฟเวอร์ (ฝังค่าปลายทางจริงด้วยการแทนค่า __X__ __Y__ __Z__ __YAW__)
+local GATE_SOURCE_TEMPLATE = [==[
+--[[
+	สคริปต์วาร์ปประตู (Script ฝั่งเซิร์ฟเวอร์)
+	วิธีใช้  : วาง Script นี้ไว้เป็นลูกของ Part ประตูวาร์ปใน Workspace
+	หน้าที่  : ตรวจจับการแตะประตู → Fade หน้าจอดำ → วาร์ป → คูลดาวน์ 2 วินาที
+	หมายเหตุ: ตำแหน่ง/มุมปลายทางถูกฝังเป็นค่าคงที่ตอนสร้างประตูจากเมนู
+]]
+local Players = game:GetService("Players")             -- ใช้หาผู้เล่นจากตัวละครที่แตะประตู
+local TweenService = game:GetService("TweenService")   -- ใช้ทำเอฟเฟกต์ Fade หน้าจอดำ
+
+local gate = script.Parent                             -- อ้างอิง Part ประตูวาร์ป (ต้องเป็นลูกของ Part)
+local COOLDOWN_TIME = 2                                -- คูลดาวน์ 2 วินาที กันวาร์ปรัว
+local FADE_TIME = 0.35                                 -- ระยะเวลา fade เข้า/ออก 1 รอบ (วินาที)
+local EXIT_POSITION = Vector3.new(__X__, __Y__, __Z__) -- ตำแหน่งปลายทาง (ค่าจริงตอนกดสร้างประตู)
+local EXIT_YAW = math.rad(__YAW__)                     -- มุมหันของตัวละคร ณ ปลายทาง (หน่วยองศา)
+
+local lastTeleportTime = {}                            -- เก็บเวลาวาร์ปล่าสุดของผู้เล่นแต่ละคน
+
+-- ฟังก์ชัน Fade หน้าจอดำ + วาร์ปตัวละคร (เรียกจากอีเวนต์ Touched)
+local function fadeAndTeleport(targetPlayer, hitCharacter)
+	local gui = Instance.new("ScreenGui")               -- สร้าง GUI ชั่วคราวสำหรับจอดำ
+	gui.Name = "TeleportFadeGui"                        -- ตั้งชื่อ GUI
+	gui.IgnoreGuiInset = true                           -- ครอบคลุมถึงแถบ UI ด้านบน
+	gui.ResetOnSpawn = false                            -- ไม่ล้างตอนตัวละครเกิดใหม่
+	gui.DisplayOrder = 9999                             -- ให้ทับ GUI อื่นทั้งหมด
+	local frame = Instance.new("Frame")                 -- กรอบสีดำเต็มจอ
+	frame.Size = UDim2.fromScale(1, 1)                  -- ครอบคลุมทั้งจอ
+	frame.BackgroundColor3 = Color3.new(0, 0, 0)        -- สีดำสนิท
+	frame.BackgroundTransparency = 1                    -- เริ่มโปร่งใส 100%
+	frame.BorderSizePixel = 0                           -- ปิดเส้นขอบ
+	frame.Parent = gui                                  -- ใส่ Frame เข้า GUI
+	gui.Parent = targetPlayer:WaitForChild("PlayerGui") -- ใส่ GUI เข้า PlayerGui ของผู้เล่น
+	local fadeIn = TweenService:Create(frame, TweenInfo.new(FADE_TIME, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {BackgroundTransparency = 0})
+	fadeIn:Play()                                       -- เริ่ม fade เป็นสีดำ
+	fadeIn.Completed:Wait()                             -- รอจนจอดำสนิท
+	if hitCharacter and hitCharacter.Parent and hitCharacter:FindFirstChild("HumanoidRootPart") then
+		hitCharacter.HumanoidRootPart.CFrame = CFrame.new(EXIT_POSITION) * CFrame.Angles(0, EXIT_YAW, 0)
+	end                                                 -- ย้ายตัวละครไปตำแหน่งปลายทาง
+	local fadeOut = TweenService:Create(frame, TweenInfo.new(FADE_TIME, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {BackgroundTransparency = 1})
+	fadeOut:Play()                                      -- เริ่ม fade กลับเป็นจอใส
+	fadeOut.Completed:Wait()                            -- รอจนจอใสสนิท
+	gui:Destroy()                                       -- ลบ GUI ชั่วคราวทิ้ง
+end
+
+-- หา Model ตัวละครจาก Part ที่แตะประตู (คืน nil ถ้าไม่ใช่ตัวละคร)
+local function findCharacterFromHit(hitPart)
+	local model = hitPart:FindFirstAncestorOfClass("Model")     -- หา ancestor ที่ใกล้ที่สุดซึ่งเป็น Model
+	if model and model:FindFirstChildOfClass("Humanoid") then    -- Model ที่มี Humanoid = ตัวละคร
+		return model                                             -- คืน Model ตัวละคร
+	end
+	return nil                                                   -- ไม่ใช่ตัวละคร → คืน nil
+end
+
+gate.Touched:Connect(function(hit)                      -- ฟังอีเวนต์ทุกครั้งที่มีอะไรแตะประตู
+	local hitCharacter = findCharacterFromHit(hit)       -- หาตัวละครจากสิ่งที่แตะ
+	if not hitCharacter then return end                  -- ไม่ใช่ตัวละคร → จบ
+	local hitHumanoid = hitCharacter:FindFirstChildOfClass("Humanoid") -- ดึง Humanoid มาตรวจ
+	if not hitHumanoid or hitHumanoid.Health <= 0 then return end      -- ไม่มี Humanoid/ตายแล้ว → ข้าม
+	local touchPlayer = Players:GetPlayerFromCharacter(hitCharacter)   -- หาผู้เล่นที่เป็นเจ้าของตัวละคร
+	if not touchPlayer then return end                   -- ไม่ใช่ผู้เล่น (เช่น NPC) → ข้าม
+	local now = os.clock()                               -- เวลาระบบปัจจุบัน (วินาที)
+	local last = lastTeleportTime[touchPlayer]           -- เวลาที่ผู้เล่นคนนี้วาร์ปล่าสุด
+	if last and (now - last) < COOLDOWN_TIME then return end   -- ยังไม่ครบ 2 วิ → ห้ามวาร์ปซ้ำ
+	lastTeleportTime[touchPlayer] = now                  -- บันทึกเวลาวาร์ปล่าสุดของผู้เล่นคนนี้
+	task.spawn(fadeAndTeleport, touchPlayer, hitCharacter) -- รัน fade+วาร์ปแบบไม่บล็อกอีเวนต์
+end)
+
+Players.PlayerRemoving:Connect(function(leavingPlayer)  -- เมื่อผู้เล่นคนใดออกจากเกม
+	lastTeleportTime[leavingPlayer] = nil                -- ล้างข้อมูลคูลดาวน์ของผู้เล่นคนนั้น
+end)
+]==]
+
+-- คืนซอร์สโค้ดสคริปต์วาร์ปที่ฝังค่าตำแหน่ง/มุมปลายทาง (Point 2) เรียบร้อยแล้ว
+local function buildGateSource(exitCFrame)
+	local position = exitCFrame.Position                        -- ดึงเฉพาะตำแหน่ง (Vector3) ของจุดปลายทาง
+	local _, yaw = exitCFrame:ToEulerAnglesYXZ()                 -- ดึงมุมหันรอบแกน Y (Yaw) ของจุดปลายทาง
+	local result = GATE_SOURCE_TEMPLATE                         -- เริ่มจากเทมเพลตที่เตรียมไว้
+	result = string.gsub(result, "__X__", tostring(position.X))        -- แทนที่ค่า X ด้วยค่าจริง
+	result = string.gsub(result, "__Y__", tostring(position.Y))        -- แทนที่ค่า Y ด้วยค่าจริง
+	result = string.gsub(result, "__Z__", tostring(position.Z))        -- แทนที่ค่า Z ด้วยค่าจริง
+	result = string.gsub(result, "__YAW__", tostring(math.deg(yaw)))   -- แทนที่มุมหันด้วยหน่วยองศา
+	return result                                                -- คืนซอร์สโค้ดที่สมบูรณ์
+end
+
+-- สร้างประตูวาร์ปที่ Point 1 พร้อมใส่ Script วาร์ป และพิมพ์ซอร์สโค้ดลง Output
+local function buildGate()
+	if not point1 then                                          -- ยังไม่ได้บันทึก Point 1
+		print("[DevUtilityV2] ยังไม่ได้บันทึก Point 1 — กดปุ่ม 'บันทึก Point 1' ก่อน")
+		return
+	end
+	if not rootPart then                                        -- ยังไม่มีตัวละคร
+		print("[DevUtilityV2] ยังไม่มีตัวละคร — ยังสร้างประตูวาร์ปไม่ได้")
+		return
+	end
+	point2 = rootPart.CFrame                                    -- บันทึกจุดปลายทาง (Exit) จากตำแหน่งที่ยืนอยู่
+	local gate = Instance.new("Part")                           -- สร้าง Part สำหรับเป็นประตูวาร์ป
+	gate.Name = "TeleportGate"                                  -- ตั้งชื่อประตู
+	gate.Size = Vector3.new(8, 10, 1)                           -- รูปทรงประตู: กว้าง 8 สูง 10 หนา 1 สตั๊ด
+	gate.Color = Color3.fromRGB(0, 140, 255)                    -- สีฟ้า
+	gate.Transparency = 0.5                                     -- โปร่งแสง 50%
+	gate.Material = Enum.Material.Neon                          -- วัสดุเรืองแสง ให้ดูเหมือนประตูวาร์ป
+	gate.Anchored = true                                        -- ยึดค้างไว้ไม่ให้ตก
+	gate.CanCollide = false                                     -- ไม่มีการชน เพื่อให้เดินเข้ากระตุ้นได้โดยไม่ติด
+	-- วางประตูให้ตั้งอยู่บนพื้น โดยกะว่าพื้นอยู่ใต้จุดที่ยืน ~3 สตั๊ด (ความสูง RootPart โดยประมาณ)
+	local floorPosition = point1.Position - Vector3.new(0, 3, 0)              -- ตำแหน่งพื้นโดยประมาณใต้จุดเริ่มต้น
+	local gatePosition = floorPosition + Vector3.new(0, gate.Size.Y / 2, 0)   -- ยกกึ่งกลางประตูให้เท่ากับครึ่งความสูง
+	local _, yaw = point1:ToEulerAnglesYXZ()                                  -- ดึงมุมหัน (Yaw) ของจุดเริ่มต้น
+	gate.CFrame = CFrame.new(gatePosition) * CFrame.Angles(0, yaw, 0)         -- ตั้งตำแหน่ง + หันหน้าตามตัวละครตอนบันทึก
+	gate.Parent = workspace                                       -- ใส่ประตูเข้า Workspace
+	local source = buildGateSource(point2)                        -- สร้างซอร์สโค้ดสำหรับจุดปลายทางรอบนี้
+	local gateScript = Instance.new("Script")                     -- สร้าง Script (server) เป็นลูกของประตู
+	gateScript.Name = "TeleportGateHandler"                       -- ตั้งชื่อสคริปต์
+	local sourceOK, sourceErr = pcall(function()                  -- พยายามใส่เนื้อหาสคริปต์ (อาจติดสิทธิ์ Plugin)
+		gateScript.Source = source                                -- กำหนดเนื้อหาของ Script
+	end)
+	if not sourceOK then                                          -- เขียน Script.Source ไม่สำเร็จ
+		local stash = Instance.new("StringValue")                  -- สร้าง StringValue สำรองเก็บซอร์ส
+		stash.Name = "SourceCode_คัดลอกไปใส่ในScript"              -- ตั้งชื่อบอกวิธีใช้
+		stash.Value = source                                      -- เก็บซอร์สโค้ดทั้งหมดไว้ในนี้
+		stash.Parent = gate                                       -- ใส่ StringValue เข้าไปในประตู
+		print("[DevUtilityV2] แจ้งเตือน: เขียน Script.Source ไม่ได้ (" .. tostring(sourceErr) .. ") → เก็บซอร์สไว้ใน StringValue แล้ว")
+	end
+	gateScript.Parent = gate                                      -- ใส่ Script เข้าไปใน Part ประตู
+	gates[#gates + 1] = {                                         -- บันทึกข้อมูลประตูลงตาราง
+		part = gate,                                              -- อ้างอิง Part ประตู
+		exitCFrame = point2,                                      -- CFrame ปลายทาง
+		lastTeleport = 0,                                         -- เวลาอนุญาตวาร์ปครั้งถัดไป (0 = วาร์ปได้ทันที)
+	}
+	print("[DevUtilityV2] สร้างประตูวาร์ปแล้ว | Point 1: " .. formatVector3(point1.Position) .. " | Point 2: " .. formatVector3(point2.Position))
+	print("[DevUtilityV2] ===== ซอร์สโค้ดสคริปต์วาร์ป (คัดลอกไปวางใน Part ประตู) =====\n" .. source .. "\n[DevUtilityV2] ===== สิ้นสุดซอร์สโค้ด =====")
+end
+
+-- ล้าง Part ทดสอบและประตูวาร์ปทั้งหมดที่เสกออกมาทิ้ง
+local function cleanUp()
+	local removed = 0                                            -- ตัวนับจำนวนที่ลบ
+	for i = #spawnedParts, 1, -1 do                              -- วนจากท้ายตารางของ Part ทดสอบ
+		local part = spawnedParts[i]                             -- หยิบ Part แต่ละชิ้น
+		if part and part.Parent then                             -- ถ้ายังอยู่ในเกม
+			part:Destroy()                                       -- ทำลายทิ้ง
+			removed = removed + 1                                -- นับจำนวน
+		end
+		spawnedParts[i] = nil                                    -- เคลียร์ค่าในตาราง
+	end
+	for i = #gates, 1, -1 do                                     -- วนจากท้ายตารางของประตูวาร์ป
+		local gateInfo = gates[i]                                -- หยิบข้อมูลประตูแต่ละบาน
+		if gateInfo.part and gateInfo.part.Parent then           -- ถ้าประตูยังอยู่ในเกม
+			gateInfo.part:Destroy()                              -- ทำลายทั้งประตูและ Script ข้างใน
+			removed = removed + 1                                -- นับจำนวน
+		end
+		gates[i] = nil                                           -- เคลียร์ค่าในตาราง
+	end
+	print("[DevUtilityV2] Clean Up: ลบ Instance ที่เสกออกมาทั้งหมดแล้ว " .. removed .. " ชิ้น")
+end
+
+-- บันทึกตำแหน่งปัจจุบันเป็น Waypoint ใหม่ (เพิ่มต่อท้ายลิสต์)
+local function saveWaypoint()
+	if not rootPart then                                         -- ยังไม่มีตัวละคร
+		print("[DevUtilityV2] ยังไม่มีตัวละคร — ยังบันทึก Waypoint ไม่ได้")
+		return
+	end
+	waypointCounter = waypointCounter + 1                        -- เพิ่มตัวนับชื่อจุด
+	table.insert(waypoints, {                                    -- เพิ่มรายการใหม่เข้าตาราง
+		name = "จุดที่ " .. waypointCounter,                      -- ชื่อจุด เช่น "จุดที่ 1"
+		cFrame = rootPart.CFrame,                                 -- เก็บพิกัด+ทิศทางปัจจุบันไว้ใช้วาร์ปภายหลัง
+	})
+	rebuildWaypointList()                                        -- สร้างลิสต์ GUI ใหม่ให้แสดงจุดที่เพิ่ม
+	refreshToggles()                                             -- อัปเดตป้ายจำนวนจุด
+end
+
+-- วาร์ปตัวละครไปยัง Waypoint ที่ระบุ (index = ลำดับในตาราง)
+local function teleportToWaypoint(index)
+	local wp = waypoints[index]                                  -- หยิบข้อมูลจุดนั้น
+	if not wp or not rootPart then return end                    -- ไม่เจอจุดหรือไม่มีตัวละคร → จบ
+	rootPart.CFrame = wp.cFrame                                  -- ย้ายตัวละครไปที่จุดที่บันทึกไว้ทันที
+end
+
+-- ลบทะเบียน Waypoint ที่ระบุ แล้วสร้างลิสต์ GUI ใหม่
+local function deleteWaypoint(index)
+	table.remove(waypoints, index)                               -- ลบรายการออกจากตาราง
+	rebuildWaypointList()                                        -- สร้างลิสต์ GUI ใหม่
+	refreshToggles()                                             -- อัปเดตป้ายจำนวนจุด
+end
+
+-- ===================== ระบบ Boost FPS (ลดกราฟฟิก/ปิดเอฟเฟก/ล้างหมอก/ปิดอนุภาค) =====================
+
+-- เปิด Boost FPS: เก็บค่าเดิมไว้ใน boostBackup เพื่อใช้คืนสภาพตอนกดปิด
+local function applyBoostFPS()
+	if boostBackup then return "Boost FPS ทำงานอยู่แล้ว" end     -- กันเปิดซ้ำ
+	local backup = {                                             -- ตารางเก็บค่าเดิมทั้งหมด
+		quality = nil,                                           -- ค่า QualityLevel เดิม
+		fogStart = Lighting.FogStart,                             -- ค่า FogStart เดิม
+		fogEnd = Lighting.FogEnd,                                 -- ค่า FogEnd เดิม
+		effects = {},                                            -- เอฟเฟก Lighting ที่ปิด {instance, originalEnabled}
+		atmospheres = {},                                        -- Atmosphere ที่ปรับ {instance, originalDensity, originalOffset}
+		particles = {},                                          -- ParticleEmitter ที่ปิด {instance, originalEnabled}
+		beams = {},                                              -- Beam ที่ปิด {instance, originalEnabled}
+		trails = {},                                             -- Trail ที่ปิด {instance, originalTransparency}
+	}
+	-- 1) ลดคุณภาพการเรนเดอร์ของเกม (วิธีเดียวที่ทำได้จากฝั่ง Client)
+	pcall(function()                                             -- ครอบด้วย pcall กันสคริปต์ค้างถ้า API เปลี่ยน
+		backup.quality = settings().Rendering.QualityLevel        -- เก็บค่า QualityLevel เดิมไว้ก่อน
+		settings().Rendering.QualityLevel = Enum.QualityLevel.Level01 -- ลดกราฟฟิกลงขั้นต่ำสุด
+	end)
+	-- 2) ปิดเอฟเฟกใน Lighting (Bloom/Blur/SunRays/ColorCorrection/DepthOfField) และล้างหมอก Atmosphere
+	for _, child in ipairs(Lighting:GetChildren()) do             -- วนดู Instance ทุกตัวใน Lighting
+		if child:IsA("PostEffect") then                           -- เอฟเฟกหลังเรนเดอร์ทุกชนิด
+			table.insert(backup.effects, { instance = child, originalEnabled = child.Enabled }) -- เก็บค่าเดิม
+			child.Enabled = false                                 -- ปิดเอฟเฟกตัวนี้
+		elseif child:IsA("Atmosphere") then                       -- Atmosphere = หมอก/บรรยากาศลอยในอากาศ
+			table.insert(backup.atmospheres, {                    -- เก็บค่าเดิมของ Atmosphere
+				instance = child,
+				originalDensity = child.Density,                  -- ความหนาแน่นหมอกเดิม
+				originalOffset = child.Offset,                    -- ระยะกระจายหมอกเดิม
+			})
+			child.Density = 0                                     -- ลดความหนาแน่นหมอกเป็นศูนย์ (ล้างหมอก)
+			child.Offset = 0                                      -- ลดระยะกระจายเป็นศูนย์
+		end
+	end
+	Lighting.FogStart = 0                                        -- กำหนด FogStart = 0
+	Lighting.FogEnd = 100000000                                  -- ดัน FogEnd ให้ไกลมาก → หมอกจางหาย มองเห็นชัดสุด (Fog คือระบบหมอกแบบเก่า)
+	-- 3) ปิดอนุภาค/ลำแสง/ทางวิ่งทั่ว Workspace (ยกเว้นส่วนที่อยู่ในตัวละครของเรา)
+	for _, inst in ipairs(workspace:GetDescendants()) do          -- วน Instance ทุกตัวใน Workspace
+		if not (character and inst:IsDescendantOf(character)) then -- ข้ามส่วนของตัวละครตัวเอง
+			if inst:IsA("ParticleEmitter") then                    -- อนุภาคควัน/ประกาย/แสง
+				table.insert(backup.particles, { instance = inst, originalEnabled = inst.Enabled }) -- เก็บค่าเดิม
+				inst.Enabled = false                              -- ปิดอนุภาคตัวนี้
+			elseif inst:IsA("Beam") then                          -- ลำแสงเชื่อมระหว่าง Part
+				table.insert(backup.beams, { instance = inst, originalEnabled = inst.Enabled }) -- เก็บค่าเดิม
+				inst.Enabled = false                              -- ปิดลำแสงตัวนี้
+			elseif inst:IsA("Trail") then                         -- ทางวิ่งท้ายตัวละคร/อาวุธ
+				table.insert(backup.trails, { instance = inst, originalTransparency = inst.Transparency }) -- เก็บค่าเดิม
+				inst.Transparency = NumberSequence.new(1)         -- ทำให้ Trail โปร่งใสสนิท (มองไม่เห็น)
+			end
+		end
+	end
+	boostBackup = backup                                         -- บันทึกว่า Boost เปิดอยู่ + เก็บค่าเดิมไว้คืน
+	-- คืนข้อความสรุปผลที่ทำทั้งหมด เพื่อแสดงบน GUI
+	return string.format(                                        -- ต่อข้อความสรุป
+		"เปิด Boost FPS แล้ว\nปิด PostEffect %d ชิ้น | ParticleEmitter %d ตัว | Beam %d ชิ้น | Trail %d เส้น\nลด QualityLevel และล้างหมอก (Atmosphere/Fog) เรียบร้อย",
+		#backup.effects, #backup.particles, #backup.beams, #backup.trails -- จำนวนที่ปิดจริงในรอบนี้
+	)
+end
+
+-- ปิด Boost FPS: คืนสภาพกราฟฟิกเป็นค่าเดิมทุกอย่างที่เคยเปลี่ยนไว้
+local function restoreBoostFPS()
+	if not boostBackup then return "ยังไม่ได้เปิด Boost FPS อยู่" end -- ยังไม่เคยเปิด → จบ
+	local b = boostBackup                                         -- หยิบตารางค่าเดิมมาใช้
+	pcall(function()                                             -- คืน QualityLevel เดิม (กัน API พัง)
+		if b.quality then settings().Rendering.QualityLevel = b.quality end -- คืนค่าคุณภาพกราฟฟิกเดิม
+	end)
+	for _, item in ipairs(b.effects) do                          -- วนเอฟเฟกที่เคยปิดไว้
+		if item.instance.Parent then item.instance.Enabled = item.originalEnabled end -- คืนสถานะเปิด/ปิดเดิม
+	end
+	for _, item in ipairs(b.atmospheres) do                      -- วน Atmosphere ที่เคยปรับไว้
+		if item.instance.Parent then                             -- ถ้ายังอยู่ในเกม
+			item.instance.Density = item.originalDensity          -- คืนความหนาแน่นหมอกเดิม
+			item.instance.Offset = item.originalOffset            -- คืนระยะกระจายหมอกเดิม
+		end
+	end
+	Lighting.FogStart = b.fogStart                               -- คืนค่า FogStart เดิม
+	Lighting.FogEnd = b.fogEnd                                   -- คืนค่า FogEnd เดิม
+	for _, item in ipairs(b.particles) do                        -- วน ParticleEmitter ที่เคยปิดไว้
+		if item.instance.Parent then item.instance.Enabled = item.originalEnabled end -- คืนสถานะเปิด/ปิดเดิมของอนุภาคแต่ละตัว
+	end
+	for _, item in ipairs(b.beams) do                            -- วน Beam ที่เคยปิดไว้
+		if item.instance.Parent then item.instance.Enabled = item.originalEnabled end -- คืนสถานะเดิม
+	end
+	for _, item in ipairs(b.trails) do                           -- วน Trail ที่เคยปิดไว้
+		if item.instance.Parent then item.instance.Transparency = item.originalTransparency end -- คืนค่าความโปร่งใสเดิม
+	end
+	boostBackup = nil                                            -- เคลียร์สถานะ Boost
+	return "คืนสภาพกราฟฟิกเดิมเรียบร้อยแล้ว"                     -- คืนข้อความยืนยัน
+end
+
+-- วาร์ปตัวละครไปยังจุดที่เมาส์ชี้ (คีย์ T หรือปุ่มในเมนู) — ยกขึ้น 3 สตั๊ดกันจมลงพื้น และรักษาทิศทางเดิม
+local function teleportToMouse()
+	local hit = getMouseHit()                                    -- ยิง Ray หาจุดที่เมาส์ชี้
+	if rootPart and hit then                                     -- มีทั้งตัวละครและจุดที่ชี้เจอ
+		local targetPosition = hit.Position + Vector3.new(0, 3, 0) -- ยกขึ้น 3 สตั๊ด กันตัวละครจมลงในพื้น
+		local currentCFrame = rootPart.CFrame                    -- เก็บ CFrame ปัจจุบันไว้ต่อท้าย
+		rootPart.CFrame = CFrame.new(targetPosition) * (currentCFrame - currentCFrame.Position) -- วาร์ปแบบคงทิศทางเดิมไว้
+		print("[DevUtilityV2] วาร์ปไปยัง " .. formatVector3(targetPosition))
+	elseif not hit then                                          -- ชี้ไปที่ว่าง (ไม่โดนวัตถุ)
+		print("[DevUtilityV2] ไม่พบพื้นผิวที่เมาส์ชี้ — ยังวาร์ปไม่ได้")
+	else                                                         -- ยังไม่มีตัวละคร
+		print("[DevUtilityV2] ยังไม่มีตัวละคร")
+	end
+end
+
+-- ===================== ส่วนสร้าง GUI เมนูภาษาไทย =====================
+
+-- สีธีมของเมนู (โทนมืดเข้ม ตัดด้วยสีเขียวอมฟ้า)
+local COLOR_WINDOW = Color3.fromRGB(24, 26, 34)                 -- สีพื้นหน้าต่างหลัก
+local COLOR_BAR = Color3.fromRGB(32, 35, 46)                    -- สีแถบหัวเรื่อง/พื้นลิสต์
+local COLOR_BTN = Color3.fromRGB(45, 50, 64)                    -- สีปุ่มปกติ
+local COLOR_BTN_HOVER = Color3.fromRGB(62, 68, 86)              -- สีปุ่มตอนเอาเมาส์ไปวาง
+local COLOR_ACCENT = Color3.fromRGB(0, 200, 170)                -- สีเน้น (ปุ่มเปิด/แท็บที่เลือก)
+local COLOR_TEXT = Color3.fromRGB(232, 236, 245)                -- สีตัวอักษรหลัก
+local COLOR_DIM = Color3.fromRGB(150, 156, 172)                 -- สีตัวอักษรองค์ประกอบ/คำอธิบาย
+local COLOR_DARK = Color3.fromRGB(18, 20, 26)                   -- สีตัวอักษรบนพื้นสีเน้น
+local FONT = Enum.Font.GothamMedium                             -- ฟอนต์ที่ใช้ทั้งเมนู
+
+-- ฟังก์ชันช่วย: ใส่มุมโค้ง (UICorner) ให้ Instance ใดก็ได้
+local function addCorner(inst, radius)
+	local corner = Instance.new("UICorner")                      -- สร้าง UICorner
+	corner.CornerRadius = UDim.new(0, radius or 6)               -- ตั้งรัศมีความโค้ง (ค่าเริ่มต้น 6px)
+	corner.Parent = inst                                         -- ผูกกับ Instance เป้าหมาย
+	return corner                                                -- คืน instance ไว้ใช้ต่อถ้าต้องการ
+end
+
+-- ฟังก์ชันช่วย: สร้างปุ่มกดทั่วไป (มีเอฟเฟกต์ตอนเอาเมาส์ไปวาง)
+local function makeButton(text, parent, size, position, callback)
+	local button = Instance.new("TextButton")                    -- สร้างปุ่ม
+	button.Size = size                                           -- กำหนดขนาด
+	button.Position = position                                   -- กำหนดตำแหน่ง
+	button.BackgroundColor3 = COLOR_BTN                          -- สีพื้นปุ่มปกติ
+	button.TextColor3 = COLOR_TEXT                               -- สีตัวอักษร
+	button.Font = FONT                                           -- ฟอนต์
+	button.TextSize = 14                                         -- ขนาดตัวอักษร
+	button.Text = text                                           -- ข้อความบนปุ่ม
+	button.AutoButtonColor = false                               -- ปิดเอฟเฟกต์กดของ Roblox (ใช้สี hover ของเราเอง)
+	addCorner(button, 6)                                        -- ทำมุมโค้ง
+	button.MouseEnter:Connect(function() button.BackgroundColor3 = COLOR_BTN_HOVER end) -- ตอนเอาเมาส์ไปวาง → สีสว่างขึ้น
+	button.MouseLeave:Connect(function() button.BackgroundColor3 = COLOR_BTN end)       -- ตอนเอาเมาส์ออก → สีกลับปกติ
+	button.MouseButton1Click:Connect(function()                  -- ตอนคลิกปุ่ม
+		if callback then callback() end                          -- รันฟังก์ชันที่ผูกไว้ (ถ้ามี)
+	end)
+	button.Parent = parent                                       -- ใส่ปุ่มเข้าไปใน Container
+	return button                                                -- คืนปุ่มไว้ใช้ต่อถ้าต้องการ
+end
+
+-- ฟังก์ชันช่วย: สร้างปุ่ม Toggle (เปิด/ปิด) — สีและข้อความเปลี่ยนตามสถานะจริง
+local function makeToggleButton(name, parent, size, position, getState, onToggle)
+	local button = Instance.new("TextButton")                    -- สร้างปุ่ม
+	button.Size = size                                           -- กำหนดขนาด
+	button.Position = position                                   -- กำหนดตำแหน่ง
+	button.BackgroundColor3 = COLOR_BTN                          -- สีพื้นเริ่มต้น (ปิด)
+	button.TextColor3 = COLOR_TEXT                               -- สีตัวอักษรเริ่มต้น
+	button.Font = FONT                                           -- ฟอนต์
+	button.TextSize = 14                                         -- ขนาดตัวอักษร
+	button.Text = name                                           -- ข้อความเริ่มต้น
+	button.AutoButtonColor = false                               -- ปิดเอฟเฟกต์กดของ Roblox
+	addCorner(button, 6)                                        -- ทำมุมโค้ง
+	button.MouseEnter:Connect(function()                         -- ตอนเอาเมาส์ไปวาง
+		if not getState() then button.BackgroundColor3 = COLOR_BTN_HOVER end -- ถ้าสถานะปิดอยู่ → สีสว่างขึ้น
+	end)
+	button.MouseLeave:Connect(function()                         -- ตอนเอาเมาส์ออก
+		if not getState() then button.BackgroundColor3 = COLOR_BTN end       -- ถ้าสถานะปิดอยู่ → สีกลับปกติ
+	end)
+	button.MouseButton1Click:Connect(function()                  -- ตอนคลิกปุ่ม
+		onToggle()                                               -- เปลี่ยนสถานะของระบบ
+		refreshToggles()                                         -- อัปเดตสี/ข้อความปุ่มทุกจุดให้ตรงสถานะใหม่
+	end)
+	button.Parent = parent                                       -- ใส่ปุ่มเข้า Container
+	table.insert(toggleRegistry, {                               -- บันทึกลงทะเบียน toggle เพื่อ refresh พร้อมกัน
+		button = button,                                         -- อ้างอิงปุ่ม
+		name = name,                                             -- ชื่อไว้แสดงผลบนปุ่ม
+		getState = getState,                                     -- ฟังก์ชันเช็คสถานะ
+	})
+	return button                                                -- คืนปุ่ม
+end
+
+-- ฟังก์ชันช่วย: สร้างป้ายข้อความ (ตัดบรรทัดอัตโนมัติ ชิดซ้าย)
+local function makeLabel(text, parent, size, position, textColor, textSize)
+	local label = Instance.new("TextLabel")                      -- สร้างป้ายข้อความ
+	label.Size = size                                            -- กำหนดขนาด
+	label.Position = position                                    -- กำหนดตำแหน่ง
+	label.BackgroundTransparency = 1                             -- ป้ายไม่มีพื้นหลัง
+	label.Font = FONT                                            -- ฟอนต์
+	label.TextSize = textSize or 14                              -- ขนาดตัวอักษร (ค่าเริ่มต้น 14)
+	label.TextColor3 = textColor or COLOR_TEXT                   -- สีตัวอักษร (ค่าเริ่มต้นสีหลัก)
+	label.TextXAlignment = Enum.TextXAlignment.Left              -- จัดข้อความชิดซ้าย
+	label.TextWrapped = true                                     -- ตัดบรรทัดอัตโนมัติ
+	label.Text = text                                            -- ข้อความในป้าย
+	label.Parent = parent                                        -- ใส่ป้ายเข้า Container
+	return label                                                 -- คืนป้ายไว้อัปเดตภายหลัง
+end
+
+-- สร้าง ScreenGui หลักของเมนู
+local screenGui = Instance.new("ScreenGui")                     -- สร้าง ScreenGui
+screenGui.Name = "DevUtilitySuiteV2"                            -- ตั้งชื่อ
+screenGui.ResetOnSpawn = false                                  -- คงอยู่แม้ตัวละครเกิดใหม่
+screenGui.DisplayOrder = 20                                     -- ให้แสดงบน GUI อื่นทั่วไป
+screenGui.Parent = playerGui                                    -- ผูกกับ PlayerGui ของเรา
+
+-- ปุ่ม ☰ สำหรับเปิดเมนู (แสดงเฉพาะตอนที่เมนูถูกปิด)
+local menuToggleButton = Instance.new("TextButton")             -- สร้างปุ่มเปิดเมนู
+menuToggleButton.Name = "OpenMenuButton"                        -- ตั้งชื่อ
+menuToggleButton.Size = UDim2.new(0, 44, 0, 44)                 -- ขนาด 44x44 px
+menuToggleButton.Position = UDim2.new(0, 12, 0, 12)             -- มุมซ้ายบน
+menuToggleButton.BackgroundColor3 = COLOR_ACCENT                -- สีเน้นให้สังเกตง่าย
+menuToggleButton.TextColor3 = COLOR_DARK                        -- สีตัวอักษรมืดบนพื้นสีเน้น
+menuToggleButton.Font = FONT                                    -- ฟอนต์
+menuToggleButton.TextSize = 22                                  -- ขนาดสัญลักษณ์เมนู
+menuToggleButton.Text = "☰"                                     -- สัญลักษณ์เมนู
+menuToggleButton.Visible = false                                -- เริ่มต้นซ่อนไว้ (เพราะเมนูเปิดอยู่)
+menuToggleButton.AutoButtonColor = false                        -- ปิดเอฟเฟกต์กดของ Roblox
+addCorner(menuToggleButton, 10)                                 -- ทำมุมโค้ง
+menuToggleButton.Parent = screenGui                             -- ใส่เข้า ScreenGui
+
+-- หน้าต่างเมนูหลัก (วางกึ่งกลางจอ)
+local mainWindow = Instance.new("Frame")                        -- สร้าง Frame หน้าต่างหลัก
+mainWindow.Name = "MainWindow"                                  -- ตั้งชื่อ
+mainWindow.Size = UDim2.new(0, 500, 0, 430)                     -- ขนาด 500x430 px
+mainWindow.Position = UDim2.new(0.5, -250, 0.5, -215)           -- กึ่งกลางจอ
+mainWindow.BackgroundColor3 = COLOR_WINDOW                      -- สีพื้นหน้าต่าง
+mainWindow.BorderSizePixel = 0                                  -- ปิดเส้นขอบ
+mainWindow.Active = true                                        -- เปิดใช้งาน input เพื่อรองรับการลาก
+addCorner(mainWindow, 10)                                       -- ทำมุมโค้ง
+mainWindow.Parent = screenGui                                   -- ใส่เข้า ScreenGui
+
+-- แถบหัวเรื่อง (ไว้แสดงชื่อ + ปุ่มปิด + ใช้ลากหน้าต่าง)
+local titleBar = Instance.new("Frame")                          -- สร้างแถบหัวเรื่อง
+titleBar.Size = UDim2.new(1, 0, 0, 40)                          -- เต็มความกว้าง สูง 40px
+titleBar.BackgroundColor3 = COLOR_BAR                           -- สีพื้นแถบ
+titleBar.BorderSizePixel = 0                                    -- ปิดเส้นขอบ
+titleBar.Parent = mainWindow                                    -- ใส่เข้าหน้าต่างหลัก
+addCorner(titleBar, 10)                                         -- ทำมุมโค้ง (รวมมุมล่างด้วย)
+local titleCover = Instance.new("Frame")                        -- แถบปิดมุมโค้งด้านล่าง ให้ต่อกับตัวหน้าต่างเนียน
+titleCover.Size = UDim2.new(1, 0, 0, 12)                        -- สูง 12px ครอบมุมโค้งล่าง
+titleCover.Position = UDim2.new(0, 0, 1, -12)                   -- วางชิดขอบล่างของแถบ
+titleCover.BackgroundColor3 = COLOR_BAR                         -- สีเดียวกับแถบ
+titleCover.BorderSizePixel = 0                                  -- ปิดเส้นขอบ
+titleCover.Parent = titleBar                                    -- ใส่เข้าแถบหัวเรื่อง
+
+local titleLabel = Instance.new("TextLabel")                    -- ป้ายชื่อโปรแกรม
+titleLabel.Size = UDim2.new(1, -100, 1, 0)                      -- เว้นที่ให้ปุ่มปิดด้านขวา
+titleLabel.Position = UDim2.new(0, 14, 0, 0)                    -- เริ่มจากขอบซ้าย 14px
+titleLabel.BackgroundTransparency = 1                           -- ไม่มีพื้นหลัง
+titleLabel.Font = FONT                                          -- ฟอนต์
+titleLabel.TextSize = 16                                        -- ขนาดตัวอักษร
+titleLabel.TextColor3 = COLOR_TEXT                              -- สีตัวอักษร
+titleLabel.TextXAlignment = Enum.TextXAlignment.Left            -- ชิดซ้าย
+titleLabel.Text = "Dev Utility Suite V2 (Dev Menu)"             -- ข้อความหัวเรื่อง
+titleLabel.Parent = titleBar                                    -- ใส่เข้าแถบหัวเรื่อง
+
+local closeButton = Instance.new("TextButton")                  -- ปุ่มปิดเมนู (✕)
+closeButton.Size = UDim2.new(0, 28, 0, 28)                      -- ขนาด 28x28 px
+closeButton.Position = UDim2.new(1, -36, 0, 6)                  -- ชิดมุมขวาบน
+closeButton.BackgroundColor3 = Color3.fromRGB(220, 80, 80)      -- สีแดงสำหรับปุ่มปิด
+closeButton.TextColor3 = COLOR_TEXT                             -- สีตัวอักษร
+closeButton.Font = FONT                                         -- ฟอนต์
+closeButton.TextSize = 14                                       -- ขนาดตัวอักษร
+closeButton.Text = "✕"                                          -- สัญลักษณ์ปิด
+closeButton.AutoButtonColor = false                             -- ปิดเอฟเฟกต์กดของ Roblox
+addCorner(closeButton, 6)                                       -- ทำมุมโค้ง
+closeButton.Parent = titleBar                                   -- ใส่เข้าแถบหัวเรื่อง
+
+-- แถบแท็บ (4 แท็บเรียงแนวนอน)
+local tabBar = Instance.new("Frame")                            -- สร้าง Frame แถบแท็บ
+tabBar.Size = UDim2.new(1, -12, 0, 36)                          -- กว้างเท่าหน้าต่าง - 12px สูง 36px
+tabBar.Position = UDim2.new(0, 6, 0, 44)                        -- ใต้แถบหัวเรื่อง
+tabBar.BackgroundTransparency = 1                               -- ไม่มีพื้นหลัง
+tabBar.Parent = mainWindow                                      -- ใส่เข้าหน้าต่างหลัก
+
+local tabLayout = Instance.new("UIListLayout")                  -- จัดเรียงปุ่มแท็บอัตโนมัติ
+tabLayout.FillDirection = Enum.FillDirection.Horizontal         -- เรียงแนวนอน
+tabLayout.Padding = UDim.new(0, 4)                              -- ระยะห่างระหว่างปุ่ม 4px
+tabLayout.HorizontalAlignment = Enum.HorizontalAlignment.Left   -- ชิดซ้าย
+tabLayout.VerticalAlignment = Enum.VerticalAlignment.Center     -- กึ่งกลางแนวตั้ง
+tabLayout.Parent = tabBar                                       -- ผูกกับแถบแท็บ
+
+-- พื้นที่เนื้อหาของแท็บ (ด้านล่างแถบแท็บ)
+local contentFrame = Instance.new("Frame")                      -- สร้าง Frame พื้นที่เนื้อหา
+contentFrame.Size = UDim2.new(1, -16, 1, -92)                   -- เว้นขอบ 8px รอบด้าน
+contentFrame.Position = UDim2.new(0, 8, 0, 84)                  -- ใต้แถบแท็บ
+contentFrame.BackgroundTransparency = 1                         -- ไม่มีพื้นหลัง
+contentFrame.Parent = mainWindow                                -- ใส่เข้าหน้าต่างหลัก
+
+local tabNames = { "หน้าหลัก", "ตัวละคร", "สร้างของ & วาร์ป", "ประสิทธิภาพ" } -- ชื่อแท็บทั้ง 4
+local tabButtons = {}                                           -- เก็บปุ่มแท็บทั้งหมด
+local tabFrames = {}                                            -- เก็บ Frame เนื้อหาของแต่ละแท็บ
+local currentTab = 1                                            -- แท็บที่เปิดอยู่ปัจจุบัน
+
+-- ฟังก์ชันสลับแท็บ: แสดง Frame ของแท็บที่เลือก และเปลี่ยนสีปุ่มแท็บ
+local function switchTab(index)
+	currentTab = index                                          -- บันทึกแท็บปัจจุบัน
+	for i, frame in ipairs(tabFrames) do                         -- วน Frame ทุกแท็บ
+		frame.Visible = (i == index)                             -- แสดงเฉพาะแท็บที่เลือก
+	end
+	for i, button in ipairs(tabButtons) do                       -- วนปุ่มแท็บทุกปุ่ม
+		button.BackgroundColor3 = (i == index) and COLOR_ACCENT or COLOR_BTN   -- แท็บที่เลือก = สีเน้น
+		button.TextColor3 = (i == index) and COLOR_DARK or COLOR_TEXT         -- แท็บที่เลือก = ตัวอักษรมืด
+	end
+end
+
+-- สร้างปุ่มแท็บ + Frame เนื้อหา ครบทั้ง 4 แท็บ
+for index, name in ipairs(tabNames) do                          -- วนชื่อแท็บทั้งหมด
+	local tabIndex = index                                      -- คัดลอกค่าลำดับไว้ในตัวแปรท้องถิ่น (กัน closure จับค่าผิด)
+	local tabButton = Instance.new("TextButton")                -- สร้างปุ่มแท็บ
+	tabButton.Size = UDim2.new(0, 118, 1, 0)                    -- กว้าง 118px เต็มความสูงแถบ
+	tabButton.BackgroundColor3 = COLOR_BTN                      -- สีพื้นปกติ
+	tabButton.TextColor3 = COLOR_TEXT                           -- สีตัวอักษร
+	tabButton.Font = FONT                                       -- ฟอนต์
+	tabButton.TextSize = 13                                     -- ขนาดตัวอักษร
+	tabButton.Text = name                                       -- ชื่อแท็บ
+	tabButton.AutoButtonColor = false                           -- ปิดเอฟเฟกต์กดของ Roblox
+	addCorner(tabButton, 6)                                     -- ทำมุมโค้ง
+	tabButton.Parent = tabBar                                   -- ใส่เข้าแถบแท็บ
+	tabButtons[tabIndex] = tabButton                            -- เก็บปุ่มไว้ในตาราง
+	tabButton.MouseButton1Click:Connect(function() switchTab(tabIndex) end) -- คลิกแล้วสลับไปแท็บนี้
+
+	local tabFrame = Instance.new("Frame")                      -- สร้าง Frame เนื้อหาของแท็บ
+	tabFrame.Size = UDim2.new(1, 0, 1, 0)                       -- เต็มพื้นที่เนื้อหา
+	tabFrame.BackgroundTransparency = 1                         -- ไม่มีพื้นหลัง
+	tabFrame.Visible = (tabIndex == 1)                          -- เริ่มต้นแสดงเฉพาะแท็บแรก
+	tabFrame.Parent = contentFrame                              -- ใส่เข้าพื้นที่เนื้อหา
+	tabFrames[tabIndex] = tabFrame                              -- เก็บ Frame ไว้ในตาราง
+end
+
+-- ===================== เนื้อหาแท็บ 1: หน้าหลัก (ข้อมูล Real-time) =====================
+local homeTab = tabFrames[1]                                   -- อ้างอิง Frame ของแท็บหน้าหลัก
+ui.posLabel = makeLabel("พิกัดตัวละคร: (ยังไม่มีตัวละคร)", homeTab, UDim2.new(1, 0, 0, 26), UDim2.new(0, 4, 0, 8))            -- ป้ายพิกัดตัวละครแบบเรียลไทม์
+ui.fpsLabel = makeLabel("FPS: -- | Ping: -- ms", homeTab, UDim2.new(1, 0, 0, 26), UDim2.new(0, 4, 0, 38))                      -- ป้าย FPS/Ping
+ui.timeLabel = makeLabel("เวลาที่เปิดใช้งาน: 00:00:00", homeTab, UDim2.new(1, 0, 0, 26), UDim2.new(0, 4, 0, 68))              -- ป้ายเวลาที่เปิดใช้งาน
+ui.statusLabel = makeLabel(statusString(), homeTab, UDim2.new(1, 0, 0, 26), UDim2.new(0, 4, 0, 98))                            -- ป้ายสถานะโหมดต่าง ๆ
+makeLabel("คีย์ลัดที่เหลือ: B = เสก Part ทดสอบ | T = วาร์ปไปจุดที่เมาส์ | F3 = วิ่งเร็ว", homeTab, UDim2.new(1, 0, 0, 40), UDim2.new(0, 4, 0, 140), COLOR_DIM, 13) -- คำอธิบายคีย์ลัด
+makeLabel("วิธีใช้: ปุ่ม ☰ เปิดเมนู / ปุ่ม ✕ ปิดเมนู | ลากแถบชื่อด้านบนเพื่อย้ายหน้าต่าง | ทุกฟังก์ชันสั่งได้จากปุ่มในเมนู", homeTab, UDim2.new(1, 0, 0, 60), UDim2.new(0, 4, 0, 186), COLOR_DIM, 13) -- คำอธิบายการใช้งาน
+
+-- ===================== เนื้อหาแท็บ 2: ตัวละคร =====================
+local charTab = tabFrames[2]                                   -- อ้างอิง Frame ของแท็บตัวละคร
+local halfBtnSize = UDim2.new(0.5, -6, 0, 38)                  -- ขนาดปุ่มครึ่งความกว้าง
+makeToggleButton("โหมดวิ่งเร็ว", charTab, halfBtnSize, UDim2.new(0, 0, 0, 8),        -- ปุ่ม toggle วิ่งเร็ว
+	function() return speedMode end,                            -- เช็คสถานะ: speedMode
+	function() setSpeedMode(not speedMode) end)                 -- กดแล้ว: สลับสถานะวิ่งเร็ว
+makeToggleButton("NoClip (ทะลุกำแพง)", charTab, halfBtnSize, UDim2.new(0.5, 6, 0, 8), -- ปุ่ม toggle NoClip
+	function() return noClipEnabled end,                        -- เช็คสถานะ: noClipEnabled
+	function() setNoClip(not noClipEnabled) end)                -- กดแล้ว: สลับสถานะ NoClip
+makeToggleButton("โหมดบิน (WASD+Space/Ctrl)", charTab, halfBtnSize, UDim2.new(0, 0, 0, 52), -- ปุ่ม toggle บิน
+	function() return flyEnabled end,                           -- เช็คสถานะ: flyEnabled
+	function() setFly(not flyEnabled) end)                      -- กดแล้ว: สลับสถานะบิน
+makeButton("รีเลือดเต็ม", charTab, halfBtnSize, UDim2.new(0.5, 6, 0, 52), function()   -- ปุ่มรีเลือดเต็ม
+	if humanoid then humanoid.Health = humanoid.MaxHealth end  -- ตั้งเลือดปัจจุบันให้เท่ากับหลอดสูงสุด
+end)
+makeButton("-", charTab, UDim2.new(0, 36, 0, 34), UDim2.new(0, 0, 0, 100), function()  -- ปุ่มลดความเร็ววิ่ง
+	walkSpeedValue = math.clamp(walkSpeedValue - 10, 16, 300)   -- ลดค่า 10 ขั้น (ขอบเขต 16-300)
+	if speedMode and humanoid then humanoid.WalkSpeed = walkSpeedValue end -- ถ้าวิ่งเร็วเปิดอยู่ ใช้ค่าใหม่ทันที
+	refreshToggles()                                            -- อัปเดตป้ายแสดงค่า
+end)
+ui.walkSpeedLabel = makeLabel("ความเร็ววิ่ง: 50", charTab, UDim2.new(1, -84, 0, 34), UDim2.new(0, 42, 0, 100), COLOR_TEXT, 14) -- ป้ายค่าความเร็ววิ่ง
+makeButton("+", charTab, UDim2.new(0, 36, 0, 34), UDim2.new(1, -36, 0, 100), function() -- ปุ่มเพิ่มความเร็ววิ่ง
+	walkSpeedValue = math.clamp(walkSpeedValue + 10, 16, 300)   -- เพิ่มค่า 10 ขั้น (ขอบเขต 16-300)
+	if speedMode and humanoid then humanoid.WalkSpeed = walkSpeedValue end -- ถ้าวิ่งเร็วเปิดอยู่ ใช้ค่าใหม่ทันที
+	refreshToggles()                                            -- อัปเดตป้ายแสดงค่า
+end)
+makeButton("-", charTab, UDim2.new(0, 36, 0, 34), UDim2.new(0, 0, 0, 140), function() -- ปุ่มลดความเร็วบิน
+	flySpeed = math.clamp(flySpeed - 25, 25, 500)               -- ลดค่า 25 ขั้น (ขอบเขต 25-500)
+	refreshToggles()                                            -- อัปเดตป้ายแสดงค่า
+end)
+ui.flySpeedLabel = makeLabel("ความเร็วบิน: 100", charTab, UDim2.new(1, -84, 0, 34), UDim2.new(0, 42, 0, 140), COLOR_TEXT, 14) -- ป้ายค่าความเร็วบิน
+makeButton("+", charTab, UDim2.new(0, 36, 0, 34), UDim2.new(1, -36, 0, 140), function() -- ปุ่มเพิ่มความเร็วบิน
+	flySpeed = math.clamp(flySpeed + 25, 25, 500)               -- เพิ่มค่า 25 ขั้น (ขอบเขต 25-500)
+	refreshToggles()                                            -- อัปเดตป้ายแสดงค่า
+end)
+makeLabel("เคล็ดลับ: เปิดโหมดบินแล้วใช้ WASD บินตามทิศกล้อง | Space ขึ้น | Ctrl ลง | ความเร็ววิ่งที่ตั้งจะถูกใช้ตอนเปิดโหมดวิ่งเร็ว", charTab, UDim2.new(1, 0, 0, 50), UDim2.new(0, 4, 0, 186), COLOR_DIM, 13) -- คำอธิบายการใช้งาน
+
+-- ===================== เนื้อหาแท็บ 3: สร้างของ & วาร์ป =====================
+local spawnTab = tabFrames[3]                                  -- อ้างอิง Frame ของแท็บสร้างของ/วาร์ป
+makeButton("เสก Part ทดสอบ (B)", spawnTab, UDim2.new(0.5, -6, 0, 34), UDim2.new(0, 0, 0, 6), spawnTestPart) -- ปุ่มเสก Part แดง 4x4x4
+makeButton("วาร์ปไปจุดที่เมาส์ (T)", spawnTab, UDim2.new(0.5, -6, 0, 34), UDim2.new(0.5, 6, 0, 6), teleportToMouse) -- ปุ่มวาร์ปไปจุดที่ชี้
+makeButton("ล้างของที่เสกทั้งหมด", spawnTab, UDim2.new(0.5, -6, 0, 34), UDim2.new(0, 0, 0, 44), cleanUp)   -- ปุ่มลบ Part/ประตูที่เสก
+makeButton("บันทึก Waypoint ตำแหน่งนี้", spawnTab, UDim2.new(0.5, -6, 0, 34), UDim2.new(0.5, 6, 0, 44), saveWaypoint) -- ปุ่มบันทึกตำแหน่งปัจจุบัน
+makeLabel("— ระบบประตูวาร์ป (Auto Gate) —", spawnTab, UDim2.new(1, 0, 0, 22), UDim2.new(0, 4, 0, 84), COLOR_ACCENT, 14) -- หัวข้อระบบประตูวาร์ป
+ui.point1Label = makeLabel("Point 1: (ยังไม่ได้บันทึก)", spawnTab, UDim2.new(1, 0, 0, 20), UDim2.new(0, 4, 0, 108), COLOR_DIM, 13) -- ป้ายแสดง Point 1
+ui.point2Label = makeLabel("Point 2: (ยังไม่ได้บันทึก)", spawnTab, UDim2.new(1, 0, 0, 20), UDim2.new(0, 4, 0, 128), COLOR_DIM, 13) -- ป้ายแสดง Point 2
+makeButton("บันทึก Point 1 (จากที่ยืน)", spawnTab, UDim2.new(0.5, -6, 0, 34), UDim2.new(0, 0, 0, 152), function() -- ปุ่มบันทึกจุดเริ่มต้นประตู
+	if rootPart then                                            -- ถ้ามีตัวละคร
+		point1 = rootPart.CFrame                                -- เก็บพิกัด+ทิศทางปัจจุบันเป็น Point 1
+		print("[DevUtilityV2] บันทึก Point 1 ที่ " .. formatVector3(point1.Position))
+		refreshToggles()                                        -- อัปเดตป้าย Point 1
+	else                                                         -- ยังไม่มีตัวละคร
+		print("[DevUtilityV2] ยังไม่มีตัวละคร")
+	end
+end)
+makeButton("สร้างประตู (Point 2 + สร้าง)", spawnTab, UDim2.new(0.5, -6, 0, 34), UDim2.new(0.5, 6, 0, 152), function() -- ปุ่มสร้างประตูวาร์ป
+	buildGate()                                                 -- บันทึก Point 2 + เสกประตูที่ Point 1 + พิมพ์ซอร์สโค้ด
+	refreshToggles()                                            -- อัปเดตป้าย Point 2
+end)
+makeLabel("— Waypoint (บันทึกได้หลายจุด) —", spawnTab, UDim2.new(0.5, -6, 0, 22), UDim2.new(0, 4, 0, 194), COLOR_ACCENT, 14) -- หัวข้อ Waypoint
+ui.waypointCountLabel = makeLabel("ที่บันทึก: 0 จุด", spawnTab, UDim2.new(0.5, -6, 0, 22), UDim2.new(0.5, 6, 0, 194), COLOR_DIM, 13) -- ป้ายจำนวน Waypoint
+
+-- ลิสต์ Waypoint (เลื่อนดูได้) พร้อม UIListLayout จัดเรียงแถวอัตโนมัติ
+waypointListFrame = Instance.new("ScrollingFrame")             -- สร้าง ScrollingFrame สำหรับลิสต์
+waypointListFrame.Size = UDim2.new(1, 0, 1, -232)              -- สูงเต็มพื้นที่ที่เหลือ
+waypointListFrame.Position = UDim2.new(0, 0, 0, 222)           -- ใต้หัวข้อ Waypoint
+waypointListFrame.BackgroundColor3 = COLOR_BAR                 -- สีพื้นลิสต์
+waypointListFrame.BorderSizePixel = 0                          -- ปิดเส้นขอบ
+waypointListFrame.ScrollBarThickness = 6                       -- ความหนาแถบเลื่อน
+waypointListFrame.ScrollBarImageColor3 = COLOR_ACCENT          -- สีแถบเลื่อน
+waypointListFrame.CanvasSize = UDim2.new(0, 0, 0, 0)           -- เริ่มต้น Canvas ว่าง (ขยายอัตโนมัติทีหลัง)
+addCorner(waypointListFrame, 6)                                -- ทำมุมโค้ง
+waypointListFrame.Parent = spawnTab                            -- ใส่เข้าแท็บ
+
+local waypointLayout = Instance.new("UIListLayout")            -- จัดเรียงแถว Waypoint อัตโนมัติ
+waypointLayout.Padding = UDim.new(0, 4)                        -- ระยะห่างระหว่างแถว 4px
+waypointLayout.SortOrder = Enum.SortOrder.LayoutOrder          -- เรียงตาม LayoutOrder ที่เรากำหนด
+waypointLayout.Parent = waypointListFrame                      -- ผูกกับลิสต์
+waypointLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function() -- ทุกครั้งที่ความสูงเนื้อหาเปลี่ยน
+	waypointListFrame.CanvasSize = UDim2.new(0, 0, 0, waypointLayout.AbsoluteContentSize.Y + 10) -- ขยายพื้นที่เลื่อนให้พอดีกับเนื้อหา
+end)
+
+-- ฟังก์ชันสร้างลิสต์ Waypoint ใหม่ทั้งหมด (ล้างแถวเก่าแล้ววาดใหม่ตามตาราง waypoints)
+rebuildWaypointList = function()
+	for _, child in ipairs(waypointListFrame:GetChildren()) do   -- วน Instance ทุกตัวในลิสต์
+		if child:IsA("Frame") then child:Destroy() end           -- ทำลายแถวเก่าทิ้ง (เก็บ UIListLayout ไว้)
+	end
+	for index, wp in ipairs(waypoints) do                        -- วน Waypoint ทุกจุดในตาราง
+		local wpIndex = index                                    -- คัดลอกลำดับไว้ในตัวแปรท้องถิ่น (กัน closure จับค่าผิด)
+		local row = Instance.new("Frame")                        -- สร้างแถวใหม่
+		row.Size = UDim2.new(1, -8, 0, 34)                       -- กว้างเต็ม - 8px สูง 34px
+		row.BackgroundColor3 = COLOR_BTN                         -- สีพื้นแถว
+		row.BorderSizePixel = 0                                  -- ปิดเส้นขอบ
+		row.LayoutOrder = wpIndex                                -- กำหนดลำดับเรียงแถว
+		addCorner(row, 6)                                        -- ทำมุมโค้ง
+		row.Parent = waypointListFrame                           -- ใส่เข้าลิสต์
+		makeLabel(string.format("%d. %s", wpIndex, formatVector3(wp.cFrame.Position)), row, UDim2.new(1, -152, 1, 0), UDim2.new(0, 8, 0, 0), COLOR_TEXT, 12) -- ป้ายชื่อ+พิกัดจุด
+		makeButton("วาร์ป", row, UDim2.new(0, 66, 1, -8), UDim2.new(1, -146, 0, 4), function() -- ปุ่มวาร์ปไปจุดนี้
+			teleportToWaypoint(wpIndex)                          -- วาร์ปไปยัง Waypoint ลำดับนี้
+		end)
+		makeButton("ลบ", row, UDim2.new(0, 66, 1, -8), UDim2.new(1, -74, 0, 4), function() -- ปุ่มลบทะเบียนจุดนี้
+			deleteWaypoint(wpIndex)                              -- ลบ Waypoint ลำดับนี้ออกจากลิสต์
+		end)
+	end
+end
+
+-- ===================== เนื้อหาแท็บ 4: ประสิทธิภาพ (Boost FPS) =====================
+local perfTab = tabFrames[4]                                   -- อ้างอิง Frame ของแท็บประสิทธิภาพ
+makeToggleButton("Boost FPS (ลดกราฟฟิก/ล้างหมอก)", perfTab, UDim2.new(1, 0, 0, 38), UDim2.new(0, 0, 0, 8), -- ปุ่ม toggle Boost FPS
+	function() return boostBackup ~= nil end,                   -- เช็คสถานะ: เปิดอยู่ถ้ามี boostBackup
+	function()                                                 -- กดแล้ว: สลับเปิด/ปิด Boost
+		if boostBackup then                                     -- ถ้าเปิดอยู่ → คืนสภาพเดิม
+			ui.boostSummary.Text = restoreBoostFPS()            -- คืนสภาพกราฟฟิกและแสดงข้อความผลลัพธ์
+		else                                                     -- ถ้ายังไม่ได้เปิด → เปิด Boost
+			ui.boostSummary.Text = applyBoostFPS()              -- ลดกราฟฟิก/ปิดเอฟเฟก/ล้างหมอก และแสดงสรุปผล
+		end
+	end)
+makeLabel("โหมดนี้ทำงานเฉพาะฝั่ง Client (เหมาะกับการทดสอบใน Studio):", perfTab, UDim2.new(1, 0, 0, 22), UDim2.new(0, 4, 0, 52), COLOR_DIM, 13) -- คำอธิบาย
+ui.boostSummary = makeLabel("สถานะ: ยังไม่ได้เปิด Boost FPS", perfTab, UDim2.new(1, 0, 0, 96), UDim2.new(0, 4, 0, 76), COLOR_TEXT, 13) -- ป้ายสรุปผลการทำ Boost
+makeLabel("สิ่งที่ทำเมื่อเปิด:\n• ลด QualityLevel ของเกมลงขั้นต่ำสุด\n• ปิด PostEffect ใน Lighting (Bloom / Blur / SunRays / ColorCorrection / DepthOfField)\n• ล้างหมอก Atmosphere และ Fog ให้มองเห็นไกลขึ้น\n• ปิด ParticleEmitter / Beam / Trail ทั่วแมป (ยกเว้นส่วนของตัวละคร)\n\nกดปุ่ม Boost FPS อีกครั้งเพื่อคืนสภาพกราฟฟิกเดิมทุกอย่าง", perfTab, UDim2.new(1, 0, 1, -180), UDim2.new(0, 4, 0, 180), COLOR_DIM, 12) -- คำอธิบายละเอียด
+
+-- ===================== การเปิด/ปิดเมนู และการลากหน้าต่าง =====================
+closeButton.MouseButton1Click:Connect(function()                -- ตอนคลิกปุ่ม ✕
+	mainWindow.Visible = false                                  -- ซ่อนหน้าต่างเมนู
+	menuToggleButton.Visible = true                             -- แสดงปุ่ม ☰ สำหรับเปิดกลับ
+end)
+menuToggleButton.MouseButton1Click:Connect(function()          -- ตอนคลิกปุ่ม ☰
+	mainWindow.Visible = true                                   -- แสดงหน้าต่างเมนู
+	menuToggleButton.Visible = false                            -- ซ่อนปุ่ม ☰ (ใช้ ✕ ปิดแทน)
+end)
+
+-- การลากหน้าต่าง: คลิกค้างที่แถบหัวเรื่องแล้วเลื่อนเมาส์
+local dragging = false                                         -- สถานะว่ากำลังลากอยู่หรือไม่
+local dragStart = nil                                          -- ตำแหน่งเมาส์ตอนเริ่มลาก
+local dragStartPos = nil                                       -- ตำแหน่งหน้าต่างตอนเริ่มลาก
+titleBar.InputBegan:Connect(function(input)                    -- เริ่มรับ input บนแถบหัวเรื่อง
+	if input.UserInputType == Enum.UserInputType.MouseButton1 then -- ถ้าเป็นคลิกซ้าย
+		dragging = true                                         -- เริ่มสถานะลาก
+		dragStart = input.Position                              -- จำตำแหน่งเมาส์ตอนคลิก
+		dragStartPos = mainWindow.Position                      -- จำตำแหน่งหน้าต่างตอนคลิก
+	end
+end)
+titleBar.InputEnded:Connect(function(input)                    -- ปล่อย input บนแถบหัวเรื่อง
+	if input.UserInputType == Enum.UserInputType.MouseButton1 then -- ถ้าเป็นการปล่อยคลิกซ้าย
+		dragging = false                                        -- หยุดสถานะลาก
+	end
+end)
+UserInputService.InputChanged:Connect(function(input)          -- ทุกครั้งที่ input เปลี่ยน (เช่น เมาส์ขยับ)
+	if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then -- ถ้ากำลังลากและเมาส์ขยับ
+		local delta = input.Position - dragStart                -- คำนวณระยะที่เมาส์ขยับจากระยะเริ่มลาก
+		mainWindow.Position = UDim2.new(                        -- ตั้งตำแหน่งใหม่ของหน้าต่าง
+			dragStartPos.X.Scale, dragStartPos.X.Offset + delta.X, -- ส่วนแกน X = ตำแหน่งเดิม + ระยะที่ขยับ
+			dragStartPos.Y.Scale, dragStartPos.Y.Offset + delta.Y  -- ส่วนแกน Y = ตำแหน่งเดิม + ระยะที่ขยับ
+		)
+	end
+end)
+
+-- ===================== ฟังก์ชันอัปเดตป้าย UI ทุกจุด (เรียกเมื่อสถานะเปลี่ยน) =====================
+refreshToggles = function()
+	for _, item in ipairs(toggleRegistry) do                    -- วนปุ่ม toggle ทุกปุ่ม
+		local on = item.getState()                              -- อ่านสถานะปัจจุบันของระบบปุ่มนี้
+		item.button.Text = item.name .. (on and "  [เปิด]" or "  [ปิด]") -- ต่อข้อความบอกสถานะบนปุ่ม
+		item.button.BackgroundColor3 = on and COLOR_ACCENT or COLOR_BTN   -- เปิด = สีเน้น / ปิด = สีปกติ
+		item.button.TextColor3 = on and COLOR_DARK or COLOR_TEXT         -- เปิด = ตัวอักษรมืด / ปิด = ตัวอักษรสว่าง
+	end
+	if ui.walkSpeedLabel then ui.walkSpeedLabel.Text = "ความเร็ววิ่ง: " .. walkSpeedValue end    -- อัปเดตป้ายความเร็ววิ่ง
+	if ui.flySpeedLabel then ui.flySpeedLabel.Text = "ความเร็วบิน: " .. flySpeed end            -- อัปเดตป้ายความเร็วบิน
+	if ui.point1Label then ui.point1Label.Text = "Point 1: " .. (point1 and formatVector3(point1.Position) or "(ยังไม่ได้บันทึก)") end -- อัปเดตป้าย Point 1
+	if ui.point2Label then ui.point2Label.Text = "Point 2: " .. (point2 and formatVector3(point2.Position) or "(ยังไม่ได้บันทึก)") end -- อัปเดตป้าย Point 2
+	if ui.waypointCountLabel then ui.waypointCountLabel.Text = "ที่บันทึก: " .. #waypoints .. " จุด" end -- อัปเดตจำนวน Waypoint
+	if ui.statusLabel then ui.statusLabel.Text = statusString() end                              -- อัปเดตป้ายสถานะรวม
+end
+
+rebuildWaypointList()                                           -- สร้างลิสต์ Waypoint ครั้งแรก (เปล่า)
+refreshToggles()                                                -- อัปเดต UI ครั้งแรกทั้งหมด
+switchTab(1)                                                    -- เปิดแท็บหน้าหลักเป็นค่าเริ่มต้น
+
+-- ===================== คีย์ลัดที่เหลืออยู่ (B / T / F3 เท่านั้น) =====================
+UserInputService.InputBegan:Connect(function(input, gameProcessedEvent)
+	if gameProcessedEvent then return end                       -- ถ้ามี GUI/ช่องแชทรับเหตุการณ์ไปแล้ว (เช่นกำลังพิมพ์แชท) → ไม่ตอบสนอง
+	if input.UserInputType ~= Enum.UserInputType.Keyboard then return end -- รับเฉพาะการกดคีย์บอร์ด
+	local key = input.KeyCode                                   -- คีย์ที่กดเข้ามา
+	if key == Enum.KeyCode.B then                               -- คีย์ B: เสก Part สีแดง 4x4x4 ตรงหน้าตัวละคร
+		spawnTestPart()                                         -- เรียกฟังก์ชันเสก Part
+	elseif key == Enum.KeyCode.T then                           -- คีย์ T: วาร์ปไปจุดที่เมาส์ชี้
+		teleportToMouse()                                       -- เรียกฟังก์ชันวาร์ป
+	elseif key == Enum.KeyCode.F3 then                          -- คีย์ F3: สลับโหมดวิ่งเร็ว
+		setSpeedMode(not speedMode)                             -- สลับสถานะวิ่งเร็ว
+		refreshToggles()                                        -- อัปเดตปุ่ม/ป้ายในเมนูให้ตรงสถานะ
+	end
+end)
+
+-- ===================== ลูป FPS (นับจำนวนเฟรมต่อวินาที) =====================
+RunService.RenderStepped:Connect(function()
+	frameCount = frameCount + 1                                 -- เพิ่มตัวนับเฟรมทุกเฟรม
+	local now = os.clock()                                      -- อ่านเวลาปัจจุบัน
+	if now - lastFpsTime >= 1 then                              -- ผ่านไปครบ 1 วินาทีแล้ว
+		fps = math.floor(frameCount / (now - lastFpsTime))       -- คำนวณ FPS = จำนวนเฟรม / เวลาที่ผ่านไป
+		frameCount = 0                                           -- รีเซ็ตตัวนับเฟรม
+		lastFpsTime = now                                        -- บันทึกเวลาอัปเดตล่าสุด
+	end
+end)
+
+-- ===================== ลูป NoClip (ปิดการชนก่อนขั้นตอนฟิสิกส์ทุกเฟรม) =====================
+RunService.Stepped:Connect(function()
+	if noClipEnabled and character and character.Parent then     -- ถ้าเปิด NoClip และมีตัวละคร
+		for _, part in ipairs(character:GetDescendants()) do      -- วนทุก Instance ภายในตัวละคร
+			if part:IsA("BasePart") then                          -- เฉพาะ Part ที่มีรูปร่างเท่านั้น
+				part.CanCollide = false                           -- ปิดการชน → เดินทะลุได้ (ทุกเฟรม)
+			end
+		end
+	end
+end)
+
+-- ===================== ลูปหลัก Heartbeat (ประตูวาร์ป + อัปเดตข้อมูล Real-time) =====================
+local lastInfoUpdate = 0                                        -- เวลาอัปเดตข้อมูลล่าสุด (ถี่ 4 ครั้ง/วินาที)
+RunService.Heartbeat:Connect(function()
+	-- 1) ตรวจจับการเดินเข้าไปในประตูวาร์ปที่สร้างไว้ (ระบบฝั่ง Client สำหรับทดสอบทันที)
+	if rootPart and rootPart.Parent and #gates > 0 then          -- มีตัวละครและมีประตูที่ต้องตรวจ
+		local now = os.clock()                                   -- อ่านเวลาปัจจุบันไว้เช็ค Cooldown
+		for _, gateInfo in ipairs(gates) do                       -- วนตรวจประตูทุกบาน
+			local gatePart = gateInfo.part                       -- Part ของประตูบานนี้
+			if gatePart and gatePart.Parent                      -- ประตูยังอยู่ในเกม
+				and now >= gateInfo.lastTeleport                 -- และพ้นคูลดาวน์ 2 วินาทีแล้ว
+				and (rootPart.Position - gatePart.Position).Magnitude <= 40 then -- อยู่ใกล้ประตูไม่เกิน 40 สตั๊ด
+				local localPosition = gatePart.CFrame:PointToObjectSpace(rootPart.Position) -- แปลงพิกัดตัวละครเป็นระบบพิกัดของประตู
+				local half = gatePart.Size * 0.5                 -- ครึ่งหนึ่งของขนาดประตู (ขอบเขตตรวจจับ)
+				local inside = math.abs(localPosition.X) <= half.X + 2  -- อยู่ในแนวกว้าง (เผื่อ 2 สตั๊ด)
+					and math.abs(localPosition.Z) <= half.Z + 2          -- อยู่ในแนวหน้า-หลัง (เผื่อ 2 สตั๊ด)
+					and math.abs(localPosition.Y) <= half.Y + 3          -- อยู่ในแนวสูง (เผื่อ 3 สตั๊ด)
+				if inside then                                    -- ตัวละครเดินเข้าเขตประตูแล้ว
+					gateInfo.lastTeleport = now + 2               -- ตั้งคูลดาวน์ 2 วินาที กันวาร์ปรัว
+					task.spawn(fadeOverlay, function()            -- รัน Fade + วาร์ปแบบไม่บล็อกเฟรมเกม
+						if rootPart and rootPart.Parent then       -- เช็คอีกครั้งว่าตัวภาพยังอยู่ในเกม
+							rootPart.CFrame = gateInfo.exitCFrame  -- ย้ายตัวละครไปจุดปลายทาง (Point 2)
+						end
+					end)
+				end
+			end
+		end
+	end
+	-- 2) อัปเดตข้อมูล Real-time บนแท็บหน้าหลัก (ถี่ประมาณ 4 ครั้ง/วินาที พอให้อ่านทัน)
+	local now = os.clock()                                       -- อ่านเวลาปัจจุบัน
+	if now - lastInfoUpdate >= 0.25 then                         -- ถ้าผ่านมา 0.25 วินาทีแล้ว
+		lastInfoUpdate = now                                     -- บันทึกเวลาอัปเดตล่าสุด
+		if ui.posLabel then                                      -- อัปเดตป้ายพิกัด
+			ui.posLabel.Text = "พิกัดตัวละคร: "                  -- หัวข้อข้อความ
+				.. (rootPart and rootPart.Parent and formatVector3(rootPart.Position) or "(ยังไม่มีตัวละคร)") -- พิกัดจริงหรือข้อความรอตัวละคร
+		end
+		if ui.fpsLabel then                                      -- อัปเดตป้าย FPS/Ping
+			ui.fpsLabel.Text = string.format("FPS: %d | Ping: %d ms", fps, math.floor(player:GetNetworkPing() * 1000)) -- FPS จากตัวนับ + Ping เป็นมิลลิวินาที
+		end
+		if ui.timeLabel then                                     -- อัปเดตป้ายเวลาที่เปิดใช้งาน
+			ui.timeLabel.Text = "เวลาที่เปิดใช้งาน: " .. formatDuration(os.clock() - scriptStartTime) -- เวลาที่ผ่านไปตั้งแต่สคริปต์เริ่มรัน
+		end
+	end
+end)
+
