@@ -1,8 +1,11 @@
 --[[
 	Dev Utility Suite V2 (แก้ไข) — LocalScript
 	ตำแหน่ง: StarterPlayer > StarterPlayerScripts
-	แท็บ: [หน้าหลัก] [ตัวละคร] [สร้าง/วาร์ป] [ประสิทธิภาพ]
+	แท็บ: [หน้าหลัก] [ตัวละคร] [สร้าง/วาร์ป] [ต่อสู้] [ประสิทธิภาพ] [ตั้งค่า]
 	คีย์ลัด: B = เสก Part | T = วาร์ปไปจุดที่เมาส์ | F3 = วิ่งเร็ว
+	ระบบต่อสู้: Aimbot ยิงในวง = โดน (หักกล้องต่อเนื่อง+ชดเดาเป้า) | ESP ศัตรู | รีโหลดไว
+	ระบบตั้งค่า: กันหลุด Anti-AFK | เปลี่ยนสีธีมเมนู | สลับภาษา ไทย/English | FOV กล้อง | ข้อมูลเซิร์ฟเวอร์
+	หมายเหตุ: ใช้ทดสอบเกมของตัวเองเท่านั้น | LocalScript ขยับกระสุนของเซิร์ฟเวอร์ตรง ๆ ไม่ได้
 ]]
 
 -- ===================== Services =====================
@@ -11,6 +14,7 @@ local UserInputService = game:GetService("UserInputService")
 local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
 local Lighting = game:GetService("Lighting")
+local VirtualUser = game:GetService("VirtualUser") -- ใช้ในระบบกันหลุด (Anti-AFK)
 
 -- ===================== ตัวแปรหลัก =====================
 local player = Players.LocalPlayer
@@ -37,12 +41,228 @@ local spawnCounter = 0
 local boostBackup = nil      -- ตาราง = Boost เปิดอยู่ / nil = ปิด
 local boostAddedConn = nil   -- ตัวจับของใหม่ที่โหลดเข้ามาตอน Boost เปิด
 
+-- ระบบต่อสู้ (Aimbot / ESP / รีโหลดไว) — สำหรับทดสอบเกมของตัวเองเท่านั้น
+local aimbotEnabled = false       -- Aimbot เปิด/ปิด (ทำงานเฉพาะตอนกดยิง)
+local fovCircleEnabled = false    -- แสดงวงกลม FOV กลางจอหรือไม่
+local espEnabled = false          -- ESP ศัตรู เปิด/ปิด
+local fastReloadEnabled = false   -- รีโหลดไว เปิด/ปิด
+local fireAiming = false          -- กำลังกดปุ่มซ้ายค้าง (ยิง)
+local aimFov = 45                 -- เส้นผ่านศูนย์กลางวงกลมเล็ง (องศา)
+local aimRange = 800              -- ระยะเล็งสูงสุด (สตั๊ด)
+local aimSmooth = 80              -- ความนุ่มกล้อง 1-100 (100 = หักทันที)
+local aimPartMode = 1             -- 1=หัว 2=รากตัว 3=อก
+local AIM_PARTS = {               -- ชื่อจุดเล็ง 2 ภาษา (index = aimPartMode)
+	th = { "หัว (Head)", "รากตัว (HumanoidRootPart)", "อก (Torso/UpperTorso)" },
+	en = { "Head", "HumanoidRootPart", "Chest (UpperTorso/Torso)" },
+}
+local aimCandidates = {}          -- รายการเป้าที่ใช้ได้ (อัปเดต 4 ครั้ง/วินาที)
+local espApplied = {}             -- [Model] = { highlight, billboard, label }
+local reloadBackup = {}           -- ค่าเดิมของ Value/Attribute ที่เร่งไป (คืนเมื่อปิด)
+local reloadTracked = {}          -- กันบันทึกค่าเดิมซ้ำ
+
+-- ระบบตั้งค่า (ภาษา / ธีมสี / Anti-AFK / FOV กล้อง)
+local antiAfkEnabled = false      -- กันหลุดเมื่อยืนนิ่ง (~20 นาที)
+local antiAfkConn = nil           -- ตัวดักเหตุการณ์ idle
+local lang = "th"                 -- ภาษาเมนู: "th" หรือ "en"
+local themeHue = 258              -- โทนสีธีม (องศา HSL, 258 = ม่วง-น้ำเงินค่าเริ่มต้น)
+local camFovLock = nil            -- บังคับ FOV กล้องต่อเนื่อง (nil = ไม่บังคับ)
+local currentTab = 1              -- แท็บที่เปิดอยู่ (ไว้ทาสีใหม่ตอนเปลี่ยนธีม)
+local textRegistry = {}           -- ป้ายข้อความนิ่ง { inst, key } — เปลี่ยนภาษาตาม key
+local sliderRegistry = {}         -- สไลเดอร์ทั้งหมด { caption, key, getValue }
+local boostSummaryState = "idle"  -- สถานะข้อความ Boost: idle/busy/done/restoring/restored
+local lastBoostStats = nil        -- ตัวเลขสถิติ Boost ล่าสุด (ใช้ประกอบข้อความตอนเปลี่ยนภาษา)
+
+-- ระบบ Log ในเมนู + กราฟ FPS/Ping
+local logEntries = {}            -- { key, args, time } — เก็บ key ไว้ แปลใหม่ได้ตอนสลับภาษา
+local MAX_LOG = 60               -- จำนวนรายการสูงสุดในประวัติ
+local FPS_GRAPH_SAMPLES = 48     -- แท่งกราฟ (48 × 0.25วิ ≈ 12 วินาทีล่าสุด)
+local fpsHistory = {}            -- ตัวอย่าง FPS (เก่าสุด → ใหม่สุด)
+local pingHistory = {}           -- ตัวอย่าง Ping (ลำดับเดียวกับ fpsHistory)
+local lastStats = { fmin = 0, favg = 0, fmax = 0, pmin = 0, pavg = 0, pmax = 0 } -- สถิติล่าสุด (ไว้แสดงผล/แปลภาษา)
+local fpsGraphBars = {}          -- แท่งกราฟ FPS ในแท็บหน้าหลัก
+
+local applyTheme                  -- forward: ทาสี GUI ใหม่ทั้งหมด (กำหนดทีหลังตอน GUI สร้างเสร็จ)
+local applyLanguage, toggleLanguage -- forward: เปลี่ยนภาษา (กำหนดทีหลัง)
+local renderLog                  -- forward: แสดงผล Log ในแท็บประวัติ (กำหนดทีหลัง)
+
+-- ===================== คลังคำศัพท์ 2 ภาษา =====================
+-- ทุก key ต้องมีครบทั้ง th และ en (ข้อความ Output ฝั่ง Debug คงเป็นไทย)
+local STR = {
+	th = {
+		on = "[เปิด]", off = "[ปิด]",
+		tab1 = "🏠 หน้าหลัก", tab2 = "🎭 ตัวละคร", tab3 = "🧭 สร้าง/วาร์ป", tab4 = "🎯 ต่อสู้", tab5 = "⚡ ประสิทธิภาพ", tab6 = "⚙️ ตั้งค่า", tab7 = "📋 ประวัติ",
+		homePos = "พิกัดตัวละคร: ", homeFps = "FPS: -- | Ping: -- ms", uptime = "เวลาที่เปิดใช้งาน: ",
+		noChar = "(ยังไม่มีตัวละคร)", serverInfo = "👥 ผู้เล่น: %d/%d | JobId: %s",
+		stLine1 = "📊 วิ่งเร็ว: %s | NoClip: %s | บิน: %s | Boost: %s",
+		stLine2 = "🎯 เล็ง: %s | 👁️ ESP: %s | 🔁 รีโหลดไว: %s",
+		stReal = "เปิด[จริง:%.0f/ตั้ง:%d]",
+		keybindHint = "🎮 คีย์ลัด: B = เสก Part ทดสอบ | T = วาร์ปไปจุดที่เมาส์ | F3 = วิ่งเร็ว",
+		howtoHint = "💡 ปุ่ม ☰ เปิดเมนู / ✕ ปิดเมนู | ลากแถบชื่อเพื่อย้ายหน้าต่าง | เลือกโหมดจากแถบด้านซ้าย",
+		btnSpeed = "🏃 โหมดวิ่งเร็ว", btnNoClip = "👻 NoClip (ทะลุกำแพง)", btnFly = "🚀 โหมดบิน (WASD)", btnHeal = "❤️ รีเลือดเต็ม",
+		slWalk = "🏃 ความเร็ววิ่ง", slFly = "🚀 ความเร็วบิน",
+		tipChar = "💡 ลากจุดกลมเพื่อปรับค่า | โหมดบิน: WASD ตามกล้อง, Space ขึ้น, Ctrl ลง",
+		btnSpawnPart = "🧱 เสก Part ทดสอบ (B)", btnTeleportMouse = "📍 วาร์ปไปจุดที่ชี้ (T)",
+		btnCleanUp = "🧹 ล้างของที่เสกทั้งหมด", btnSaveWp = "⭐ บันทึก Waypoint",
+		gateHeader = "— 🌀 ระบบประตูวาร์ป (Auto Gate) —", noPoint = "(ยังไม่ได้บันทึก)",
+		p1Label = "Point 1: %s", p2Label = "Point 2: %s",
+		btnSaveP1 = "🚩 บันทึก Point 1", btnBuildGate = "🌀 สร้างประตูวาร์ป",
+		wpHeader = "— 📌 Waypoint —", wpCount = "ที่บันทึก: %d จุด", wpTeleport = "วาร์ป", wpDelete = "ลบ",
+		aimSec = "— 🎯 Aimbot (ยิงในวง = โดน) —", btnAimbot = "🎯 Aimbot (ยิงในวง = โดน)",
+		slFov = "🎯 วงกลม FOV (องศา)", slRange = "📏 ระยะเล็ง (สตั๊ด)", slSmooth = "🌊 ความนุ่มกล้อง (100 = ทันที)",
+		btnAimPart = "🎯 จุดเล็ง", btnFovCircle = "⭕ วงกลม FOV บนจอ",
+		espSec = "— 👁️ ESP ศัตรู (ทะลุกำแพง) —", btnEsp = "👁️ ESP ศัตรู (ไม่รวมเพื่อนร่วมทีม)",
+		btnFastReload = "🔁 รีโหลดกระสุนเร็ว",
+		btnBoost = "⚡ Boost FPS (ดินน้ำมัน/ปิดเอฟเฟก)", perfClient = "🖥️ ทำงานเฉพาะฝั่ง Client (เครื่องคุณเท่านั้น):",
+		boostIdle = "สถานะ: ยังไม่ได้เปิด Boost FPS", boostBusy = "กำลังแปลงเป็นดินน้ำมัน... (ทำทีละชุด ไม่ให้เกมค้าง)",
+		boostDone = "เปิด Boost FPS (ดินน้ำมัน) เสร็จแล้ว\nวัสดุ %d | เท็กซ์เจอร์ %d | PBR %d\nปิดเอฟเฟก %d | PostEffect %d | เงา %d",
+		boostRestoreBusy = "กำลังคืนสภาพกราฟฟิกเดิม...", boostRestored = "คืนสภาพกราฟฟิกเดิมเรียบร้อยแล้ว",
+		boostAlready = "Boost FPS ทำงานอยู่แล้ว", boostNotOn = "ยังไม่ได้เปิด Boost FPS",
+		perfList = "📋 สิ่งที่ทำเมื่อเปิด:\n• ลด QualityLevel ลงขั้นต่ำสุด\n• ทุก Part เป็น SmoothPlastic (ดินน้ำมัน) + ปิดสะท้อน + ปิดเงา\n• ล้าง Texture/Decal/MeshPart texture/พื้นผิว PBR\n• ปิด Bloom/Blur/SunRays/ColorCorrection/DepthOfField, Particle, Beam, Trail, Fire, Smoke, Sparkles\n• ล้างหมอก + ปิดหญ้า/คลื่นน้ำของ Terrain\n• ของที่โหลดเข้ามาทีหลังถูกแปลงอัตโนมัติ\n\nกดปุ่มอีกครั้งเพื่อคืนสภาพเดิมทั้งหมด",
+		secGeneral = "— ⚙️ ตั้งค่า —", btnAntiAfk = "🛡️ กันหลุด (Anti-AFK)",
+		noteAntiAfk = "• กันโดนเตะเมื่อยืนนิ่ง ~20 นาที (จำลองขยับเมาส์อัตโนมัติ)",
+		secLang = "— 🌐 ภาษา / Language —", btnLang = "🌐 ภาษา: ไทย → English",
+		secTheme = "— 🎨 สีธีมเมนู —", slHue = "🎨 โทนสี (ลากเปลี่ยนสีทั้งเมนู)",
+		pre1 = "ม่วง", pre2 = "ฟ้า", pre3 = "เขียว", pre4 = "แดง",
+		slCamFov = "🖥️ FOV กล้อง (บังคับต่อเนื่อง)", btnResetTheme = "🔄 รีเซ็ตสีธีม",
+		logHeader = "— 📋 ประวัติการทำงาน —", logCount = "รายการ: %d / %d", logClear = "🗑️ ล้างประวัติ",
+		logEmpty = "(ยังไม่มีรายการ — การกระทำต่าง ๆ จะขึ้นที่นี่)",
+		statFps = "📈 FPS (ต่ำ/เฉลี่ย/สูง): %d / %.1f / %d",
+		statPing = "📶 Ping (ต่ำ/เฉลี่ย/สูง): %d / %.0f / %d ms",
+		lgNoChar = "⚠️ ยังไม่มีตัวละคร", lgNoHumanoid = "⚠️ ยังไม่พบ Humanoid — จะลองใหม่อัตโนมัติ",
+		lgSpeedOn = "🏃 เปิดวิ่งเร็ว (WalkSpeed = %s)", lgSpeedOff = "🏃 ปิดวิ่งเร็ว (ค่าเริ่มต้น %s)",
+		lgNoClipOn = "👻 เปิด NoClip (ทะลุกำแพง)", lgNoClipOff = "👻 ปิด NoClip",
+		lgFlyOn = "🚀 เปิดโหมดบิน", lgFlyOff = "🚀 ปิดโหมดบิน",
+		lgHeal = "❤️ รีเลือดเต็มแล้ว", lgSpawnPart = "🧱 เสก Part ทดสอบที่ %s",
+		lgWpSaved = "⭐ บันทึก Waypoint #%s ที่ %s", lgWpTeleport = "⭐ วาร์ปไป Waypoint #%s", lgWpDelete = "🗑️ ลบ Waypoint #%s",
+		lgP1Saved = "🚩 บันทึก Point 1 ที่ %s", lgGateNeedP1 = "⚠️ ต้องบันทึก Point 1 ก่อน",
+		lgGateBuilt = "🌀 สร้างประตูวาร์ปแล้ว | P1: %s | P2: %s",
+		lgGateScriptErr = "⚠️ เขียน Script.Source ไม่ได้ (%s) → เก็บซอร์สใน StringValue",
+		lgCleanUp = "🧹 ล้างของที่เสกแล้ว (%s ชิ้น)", lgTeleportCursor = "📍 วาร์ปไปยัง %s", lgNoSurface = "⚠️ ไม่พบพื้นผิวที่ชี้",
+		lgEspOn = "👁️ เปิด ESP (เฉพาะศัตรู ไม่ขึ้นให้เพื่อนร่วมทีม)", lgEspOff = "👁️ ปิด ESP แล้ว",
+		lgAimbotOn = "🎯 เปิด Aimbot — ยิงในวงแล้วกล้องจะหักไปหาเป้าเอง", lgAimbotOff = "🎯 ปิด Aimbot",
+		lgAimPart = "🎯 จุดเล็ง: %s", lgReloadOn = "🔁 เปิดรีโหลดไว (เฉพาะปืนที่เก็บเวลาใน Value/Attribute)", lgReloadOff = "🔁 ปิดรีโหลดไว — คืนค่าเดิมแล้ว",
+		lgAfkOn = "🛡️ เปิดกันหลุด (Anti-AFK)", lgAfkOff = "🛡️ ปิดกันหลุด (Anti-AFK)",
+		lgAfkIdle = "🛡️ กันหลุด: เกมเตือน idle → จำลองขยับเมาส์แล้ว",
+		lgLang = "🌐 เปลี่ยนภาษาเป็น %s", lgBoostOn = "⚡ เปิด Boost FPS (ดินน้ำมัน)", lgBoostRestore = "⚡ คืนสภาพกราฟฟิกเดิมแล้ว",
+	},
+	en = {
+		on = "[On]", off = "[Off]",
+		tab1 = "🏠 Home", tab2 = "🎭 Character", tab3 = "🧭 Build/Warp", tab4 = "🎯 Combat", tab5 = "⚡ Performance", tab6 = "⚙️ Settings", tab7 = "📋 Log",
+		homePos = "Character position: ", homeFps = "FPS: -- | Ping: -- ms", uptime = "Uptime: ",
+		noChar = "(no character)", serverInfo = "👥 Players: %d/%d | JobId: %s",
+		stLine1 = "📊 Speed: %s | NoClip: %s | Fly: %s | Boost: %s",
+		stLine2 = "🎯 Aimbot: %s | 👁️ ESP: %s | 🔁 Fast reload: %s",
+		stReal = "ON[real:%.0f/set:%d]",
+		keybindHint = "🎮 Keys: B = spawn test Part | T = teleport to cursor | F3 = speed mode",
+		howtoHint = "💡 ☰ opens menu / ✕ closes | drag the title bar to move | pick modes from the left sidebar",
+		btnSpeed = "🏃 Speed mode", btnNoClip = "👻 NoClip (walk through walls)", btnFly = "🚀 Fly mode (WASD)", btnHeal = "❤️ Full heal",
+		slWalk = "🏃 Walk speed", slFly = "🚀 Fly speed",
+		tipChar = "💡 Drag the dot to adjust | Fly: WASD follows camera, Space up, Ctrl down",
+		btnSpawnPart = "🧱 Spawn test Part (B)", btnTeleportMouse = "📍 Teleport to cursor (T)",
+		btnCleanUp = "🧹 Clean up spawned parts", btnSaveWp = "⭐ Save waypoint",
+		gateHeader = "— 🌀 Warp gate (Auto Gate) —", noPoint = "(not saved)",
+		p1Label = "Point 1: %s", p2Label = "Point 2: %s",
+		btnSaveP1 = "🚩 Save Point 1", btnBuildGate = "🌀 Build warp gate",
+		wpHeader = "— 📌 Waypoints —", wpCount = "%d saved", wpTeleport = "Go", wpDelete = "Del",
+		aimSec = "— 🎯 Aimbot (in circle = hit) —", btnAimbot = "🎯 Aimbot (in circle = hit)",
+		slFov = "🎯 FOV circle (degrees)", slRange = "📏 Aim range (studs)", slSmooth = "🌊 Camera snap (100 = instant)",
+		btnAimPart = "🎯 Aim part", btnFovCircle = "⭕ Show FOV circle",
+		espSec = "— 👁️ Enemy ESP (through walls) —", btnEsp = "👁️ Enemy ESP (skip teammates)",
+		btnFastReload = "🔁 Fast reload",
+		btnBoost = "⚡ Boost FPS (clay / no effects)", perfClient = "🖥️ Client-side only (your machine):",
+		boostIdle = "Status: Boost FPS is off", boostBusy = "Converting to clay... (batched to avoid lag)",
+		boostDone = "Boost FPS (clay) enabled\nMaterials %d | Textures %d | PBR %d\nEffects %d | PostEffect %d | Shadows %d",
+		boostRestoreBusy = "Restoring original graphics...", boostRestored = "Original graphics restored",
+		boostAlready = "Boost FPS is already running", boostNotOn = "Boost FPS is not enabled",
+		perfList = "📋 What it does:\n• Drops QualityLevel to minimum\n• Every Part becomes SmoothPlastic + no reflections/shadows\n• Clears Texture/Decal/MeshPart texture/PBR\n• Disables Bloom/Blur/SunRays/ColorCorrection/DepthOfField, Particle, Beam, Trail, Fire, Smoke, Sparkles\n• Clears fog + disables Terrain grass/waves\n• Converts parts loaded later automatically\n\nPress again to restore everything",
+		secGeneral = "— ⚙️ Settings —", btnAntiAfk = "🛡️ Anti-AFK",
+		noteAntiAfk = "• Prevents kick after ~20 min idle (fakes mouse movement)",
+		secLang = "— 🌐 Language / ภาษา —", btnLang = "🌐 Language: English → Thai",
+		secTheme = "— 🎨 Menu theme —", slHue = "🎨 Hue (recolors whole menu)",
+		pre1 = "Purple", pre2 = "Cyan", pre3 = "Green", pre4 = "Red",
+		slCamFov = "🖥️ Camera FOV (forced)", btnResetTheme = "🔄 Reset theme",
+		logHeader = "— 📋 Activity Log —", logCount = "Entries: %d / %d", logClear = "🗑️ Clear log",
+		logEmpty = "(No entries yet — your actions will appear here)",
+		statFps = "📈 FPS (min/avg/max): %d / %.1f / %d",
+		statPing = "📶 Ping (min/avg/max): %d / %.0f / %d ms",
+		lgNoChar = "⚠️ No character", lgNoHumanoid = "⚠️ Humanoid not found — will retry",
+		lgSpeedOn = "🏃 Speed ON (WalkSpeed = %s)", lgSpeedOff = "🏃 Speed OFF (default %s)",
+		lgNoClipOn = "👻 NoClip ON (walk through walls)", lgNoClipOff = "👻 NoClip OFF",
+		lgFlyOn = "🚀 Fly mode ON", lgFlyOff = "🚀 Fly mode OFF",
+		lgHeal = "❤️ Full heal", lgSpawnPart = "🧱 Spawned test Part at %s",
+		lgWpSaved = "⭐ Saved Waypoint #%s at %s", lgWpTeleport = "⭐ Teleported to Waypoint #%s", lgWpDelete = "🗑️ Deleted Waypoint #%s",
+		lgP1Saved = "🚩 Saved Point 1 at %s", lgGateNeedP1 = "⚠️ Save Point 1 first",
+		lgGateBuilt = "🌀 Warp gate built | P1: %s | P2: %s",
+		lgGateScriptErr = "⚠️ Cannot write Script.Source (%s) → source kept in StringValue",
+		lgCleanUp = "🧹 Cleaned up spawned parts (%s)", lgTeleportCursor = "📍 Teleported to %s", lgNoSurface = "⚠️ No surface under cursor",
+		lgEspOn = "👁️ ESP ON (enemies only, teammates hidden)", lgEspOff = "👁️ ESP OFF",
+		lgAimbotOn = "🎯 Aimbot ON — hold fire, camera bends to target", lgAimbotOff = "🎯 Aimbot OFF",
+		lgAimPart = "🎯 Aim part: %s", lgReloadOn = "🔁 Fast reload ON (guns storing time in Value/Attribute only)", lgReloadOff = "🔁 Fast reload OFF — restored",
+		lgAfkOn = "🛡️ Anti-AFK ON", lgAfkOff = "🛡️ Anti-AFK OFF",
+		lgAfkIdle = "🛡️ Anti-AFK: idle warning → fake mouse move sent",
+		lgLang = "🌐 Switched language to %s", lgBoostOn = "⚡ Boost FPS (clay) enabled", lgBoostRestore = "⚡ Original graphics restored",
+	},
+}
+
+-- ดึงข้อความตามภาษาปัจจุบัน (ถ้า key หาย → คืน key เอง กัน UI เพี้ยน)
+local function T(key)
+	local pack = STR[lang] or STR.th
+	return pack[key] or key
+end
+
+-- ผูกป้ายข้อความกับ key ภาษา (เปลี่ยนภาษาแล้วอัปเดตอัตโนมัติ)
+local function bindText(inst, key)
+	table.insert(textRegistry, { inst = inst, key = key })
+	inst.Text = T(key)
+	return inst
+end
+
+local function aimPartName()
+	local pack = AIM_PARTS[lang] or AIM_PARTS.th
+	return pack[aimPartMode]
+end
+
+-- ===================== Log ในเมนู =====================
+-- บันทึกเหตุการณ์ลงประวัติ (แสดงในแท็บ 📋) พร้อมพิมพ์ลง Output ฝั่งไทยเสมอ
+-- หมายเหตุ: ต้องประกาศก่อนฟังก์ชันที่เรียกใช้ (เช่น setAntiAfk) ไม่งั้น Lua มองไม่เห็น
+local function devLog(key, ...)
+	local args = { ... }
+	table.insert(logEntries, { key = key, args = args, time = os.clock() })
+	while #logEntries > MAX_LOG do table.remove(logEntries, 1) end
+	local thText = STR.th[key] or key
+	local ok, formatted = pcall(string.format, thText, table.unpack(args))
+	print("[DevUtilityV2] " .. (ok and formatted or thText))
+	if renderLog then renderLog() end
+end
+
+-- ===================== กันหลุด (Anti-AFK) =====================
+-- เมื่อเกมเตือนว่ายืนนิ่ง (~20 นาที) ให้จำลองคลิกเมาส์ปลอม 1 ครั้ง → รีเซ็ตตัวจับเวลาเตะ
+local function setAntiAfk(enabled)
+	antiAfkEnabled = enabled
+	if antiAfkConn then antiAfkConn:Disconnect() antiAfkConn = nil end
+	if antiAfkEnabled then
+		antiAfkConn = player.Idled:Connect(function()
+			pcall(function()
+				local cam = workspace.CurrentCamera
+				VirtualUser:Button2Down(Vector2.new(0, 0), cam.CFrame)
+				task.wait(0.1)
+				VirtualUser:Button2Up(Vector2.new(0, 0), cam.CFrame)
+			end)
+			devLog("lgAfkIdle")
+		end)
+		devLog("lgAfkOn")
+	else
+		devLog("lgAfkOff")
+	end
+end
+
 local fps, frameCount, lastFpsTime = 0, 0, os.clock()
 
 local ui = {}
 local toggleRegistry = {}
 local waypointListFrame = nil
 local mainWindow = nil
+local fovGui, fovCircle = nil, nil -- วงกลม FOV ของ Aimbot
 local refreshToggles
 local rebuildWaypointList
 
@@ -72,13 +292,16 @@ local function getMouseHit()
 end
 
 local function statusString()
-	return string.format(
-		"📊 วิ่งเร็ว: %s | NoClip: %s | บิน: %s | Boost FPS: %s",
-		speedMode and string.format("เปิด[จริง:%.0f/ตั้ง:%d]", (humanoid and humanoid.WalkSpeed or -1), walkSpeedValue) or "ปิด",
-		noClipEnabled and "เปิด" or "ปิด",
-		flyEnabled and "เปิด" or "ปิด",
-		boostBackup and "เปิด" or "ปิด"
-	)
+	-- ประกอบข้อความสถานะตามภาษาปัจจุบัน (ค่าเปิด/ปิด ใช้ key on/off)
+	return string.format(T("stLine1"),
+		speedMode and string.format(T("stReal"), (humanoid and humanoid.WalkSpeed or -1), walkSpeedValue) or T("off"),
+		noClipEnabled and T("on") or T("off"),
+		flyEnabled and T("on") or T("off"),
+		boostBackup and T("on") or T("off"))
+		.. "\n" .. string.format(T("stLine2"),
+		aimbotEnabled and T("on") or T("off"),
+		espEnabled and T("on") or T("off"),
+		fastReloadEnabled and T("on") or T("off"))
 end
 
 -- ===================== วิ่งเร็ว (แก้ใหม่) =====================
@@ -131,16 +354,16 @@ local function setSpeedMode(enabled)
 	speedMode = enabled
 	local h = refreshHumanoid()
 	if not h then
-		print("[DevUtilityV2] ยังไม่พบ Humanoid — จะลองใหม่อัตโนมัติ")
+		devLog("lgNoHumanoid")
 		return
 	end
 	if speedMode then
 		h.WalkSpeed = walkSpeedValue
 		h.Health = h.MaxHealth
-		print("[DevUtilityV2] เปิดวิ่งเร็ว → WalkSpeed = " .. walkSpeedValue)
+		devLog("lgSpeedOn", walkSpeedValue)
 	else
 		h.WalkSpeed = WALK_DEFAULT
-		print("[DevUtilityV2] ปิดวิ่งเร็ว → WalkSpeed = " .. WALK_DEFAULT)
+		devLog("lgSpeedOff", WALK_DEFAULT)
 	end
 end
 
@@ -177,6 +400,7 @@ local function setNoClip(enabled)
 			if part:IsA("BasePart") then part.CanCollide = true end
 		end
 	end
+	devLog(noClipEnabled and "lgNoClipOn" or "lgNoClipOff")
 end
 
 local function setFly(enabled)
@@ -201,11 +425,12 @@ local function setFly(enabled)
 			end
 		end)
 	end
+	devLog(flyEnabled and "lgFlyOn" or "lgFlyOff")
 end
 
 -- ===================== สร้างของ / ประตูวาร์ป / Waypoint =====================
 local function spawnTestPart()
-	if not rootPart then print("[DevUtilityV2] ยังไม่มีตัวละคร") return end
+	if not rootPart then devLog("lgNoChar") return end
 	spawnCounter = spawnCounter + 1
 	local part = Instance.new("Part")
 	part.Name = "DevTestPart_" .. spawnCounter
@@ -216,7 +441,7 @@ local function spawnTestPart()
 	part.CFrame = rootPart.CFrame * CFrame.new(0, 0, -5)
 	part.Parent = workspace
 	spawnedParts[#spawnedParts + 1] = part
-	print("[DevUtilityV2] เสก Part | " .. formatVector3(part.Position))
+	devLog("lgSpawnPart", formatVector3(part.Position))
 end
 
 local GATE_SOURCE_TEMPLATE = [==[
@@ -287,8 +512,8 @@ local function buildGateSource(exitCFrame)
 end
 
 local function buildGate()
-	if not point1 then print("[DevUtilityV2] ยังไม่ได้บันทึก Point 1") return end
-	if not rootPart then print("[DevUtilityV2] ยังไม่มีตัวละคร") return end
+	if not point1 then devLog("lgGateNeedP1") return end
+	if not rootPart then devLog("lgNoChar") return end
 	point2 = rootPart.CFrame
 	local gate = Instance.new("Part")
 	gate.Name = "TeleportGate"
@@ -312,11 +537,11 @@ local function buildGate()
 		stash.Name = "SourceCode_คัดลอกไปใส่ในScript"
 		stash.Value = source
 		stash.Parent = gate
-		print("[DevUtilityV2] เขียน Script.Source ไม่ได้ (" .. tostring(err) .. ") → เก็บซอร์สใน StringValue")
+		devLog("lgGateScriptErr", tostring(err))
 	end
 	gateScript.Parent = gate
 	gates[#gates + 1] = { part = gate, exitCFrame = point2, lastTeleport = 0 }
-	print("[DevUtilityV2] สร้างประตูวาร์ปแล้ว | P1: " .. formatVector3(point1.Position) .. " | P2: " .. formatVector3(point2.Position))
+	devLog("lgGateBuilt", formatVector3(point1.Position), formatVector3(point2.Position))
 	print("[DevUtilityV2] ===== ซอร์สสคริปต์วาร์ป =====\n" .. source .. "\n===== จบ =====")
 end
 
@@ -332,24 +557,27 @@ local function cleanUp()
 		if g.part and g.part.Parent then g.part:Destroy() removed = removed + 1 end
 		gates[i] = nil
 	end
-	print("[DevUtilityV2] Clean Up: ลบ " .. removed .. " ชิ้น")
+	devLog("lgCleanUp", removed)
 end
 
 local function saveWaypoint()
-	if not rootPart then print("[DevUtilityV2] ยังไม่มีตัวละคร") return end
+	if not rootPart then devLog("lgNoChar") return end
 	waypointCounter = waypointCounter + 1
 	table.insert(waypoints, { name = "จุดที่ " .. waypointCounter, cFrame = rootPart.CFrame })
 	rebuildWaypointList()
 	refreshToggles()
+	devLog("lgWpSaved", waypointCounter, formatVector3(rootPart.Position))
 end
 
 local function teleportToWaypoint(index)
 	local wp = waypoints[index]
 	if not wp or not rootPart then return end
 	rootPart.CFrame = wp.cFrame
+	devLog("lgWpTeleport", index)
 end
 
 local function deleteWaypoint(index)
+	devLog("lgWpDelete", index)
 	table.remove(waypoints, index)
 	rebuildWaypointList()
 	refreshToggles()
@@ -361,11 +589,11 @@ local function teleportToMouse()
 		local target = hit.Position + Vector3.new(0, 3, 0)
 		local cf = rootPart.CFrame
 		rootPart.CFrame = CFrame.new(target) * (cf - cf.Position)
-		print("[DevUtilityV2] วาร์ปไปยัง " .. formatVector3(target))
+		devLog("lgTeleportCursor", formatVector3(target))
 	elseif not hit then
-		print("[DevUtilityV2] ไม่พบพื้นผิวที่เมาส์ชี้")
+		devLog("lgNoSurface")
 	else
-		print("[DevUtilityV2] ยังไม่มีตัวละคร")
+		devLog("lgNoChar")
 	end
 end
 
@@ -410,13 +638,32 @@ local function boostInstance(inst, b)
 		elseif inst:IsA("Texture") or inst:IsA("Decal") then
 			table.insert(b.textures, { inst, inst.Texture }); inst.Texture = ""
 		elseif inst:IsA("Highlight") then
-			table.insert(b.enabled, { inst, inst.Enabled }); inst.Enabled = false
+			-- ห้ามแตะ Highlight ของ ESP เราเอง (ไม่งั้น Boost จะปิด ESP ของเราด้วย)
+			if string.sub(inst.Name, 1, 7) ~= "DevESP_" then
+				table.insert(b.enabled, { inst, inst.Enabled }); inst.Enabled = false
+			end
 		end
 	end)
 end
 
+-- แสดงข้อความ Boost ตามสถานะ + ภาษาปัจจุบัน (เรียกซ้ำได้ตอนเปลี่ยนภาษา)
+local function renderBoostSummary()
+	if not ui.boostSummary then return end
+	if boostSummaryState == "done" and lastBoostStats then
+		ui.boostSummary.Text = string.format(T("boostDone"), table.unpack(lastBoostStats))
+	elseif boostSummaryState == "busy" then
+		ui.boostSummary.Text = T("boostBusy")
+	elseif boostSummaryState == "restoring" then
+		ui.boostSummary.Text = T("boostRestoreBusy")
+	elseif boostSummaryState == "restored" then
+		ui.boostSummary.Text = T("boostRestored")
+	else
+		ui.boostSummary.Text = T("boostIdle")
+	end
+end
+
 local function applyBoostFPS()
-	if boostBackup then return "Boost FPS ทำงานอยู่แล้ว" end
+	if boostBackup then return T("boostAlready") end
 	local b = {
 		quality = nil,
 		fogStart = Lighting.FogStart, fogEnd = Lighting.FogEnd,
@@ -427,6 +674,8 @@ local function applyBoostFPS()
 		surfaces = {}, textures = {}, terrain = nil,
 	}
 	boostBackup = b -- ตั้งก่อน เพื่อให้สถานะ/ปุ่มเปลี่ยนเป็น "เปิด" ทันที
+	boostSummaryState = "busy"
+	devLog("lgBoostOn")
 
 	pcall(function()
 		b.quality = settings().Rendering.QualityLevel
@@ -464,18 +713,19 @@ local function applyBoostFPS()
 			count = count + 1
 			if count % 400 == 0 then task.wait() end
 		end
-		if ui.boostSummary and boostBackup == b then
-			ui.boostSummary.Text = string.format(
-				"เปิด Boost FPS (ดินน้ำมัน) เสร็จแล้ว\nเปลี่ยนวัสดุ %d ชิ้น | ล้างเท็กซ์เจอร์ %d | ถอดพื้นผิว PBR %d\nปิดเอฟเฟกอนุภาค/ลำแสง/ไฟ %d | PostEffect %d | ปิดเงา %d ชิ้น",
-				#b.materials, #b.textures + #b.meshTex, #b.surfaces, #b.enabled, #b.effects, #b.shadows)
+		if boostBackup == b then
+			lastBoostStats = { #b.materials, #b.textures + #b.meshTex, #b.surfaces, #b.enabled, #b.effects, #b.shadows }
+			boostSummaryState = "done"
+			renderBoostSummary()
 		end
 	end)
 
-	return "กำลังแปลงเป็นดินน้ำมัน... (ทำทีละชุด ไม่ให้เกมค้าง)"
+	return T("boostBusy")
 end
 
 local function restoreBoostFPS()
-	if not boostBackup then return "ยังไม่ได้เปิด Boost FPS" end
+	if not boostBackup then return T("boostNotOn") end
+	boostSummaryState = "restoring"
 	local b = boostBackup
 	boostBackup = nil -- ตั้งก่อน เพื่อหยุดลูปแปลงที่ค้างอยู่
 	if boostAddedConn then boostAddedConn:Disconnect() boostAddedConn = nil end
@@ -514,9 +764,330 @@ local function restoreBoostFPS()
 				t.Decoration, t.WaterWaveSize, t.WaterWaveSpeed, t.WaterReflectance = b.terrain[1], b.terrain[2], b.terrain[3], b.terrain[4]
 			end)
 		end
-		if ui.boostSummary then ui.boostSummary.Text = "คืนสภาพกราฟฟิกเดิมเรียบร้อยแล้ว" end
+		boostSummaryState = "restored"
+		lastBoostStats = nil
+		renderBoostSummary()
+		devLog("lgBoostRestore")
 	end)
-	return "กำลังคืนสภาพกราฟฟิกเดิม..."
+	return T("boostRestoreBusy")
+end
+
+-- ===================== ระบบต่อสู้: ทีม / ESP / Aimbot / รีโหลดไว =====================
+-- ⚠️ ใช้ทดสอบเกมของตัวเองเท่านั้น ห้ามนำไปใช้ในเกมคนอื่น
+-- กติกาทีม: มีทีมและตรงกัน = เพื่อนร่วมทีม (ไม่เล็ง/ไม่ขึ้น ESP) | ไม่มีทีมทั้งคู่ = ถือเป็นศัตรู
+local function isTeammate(other)
+	if not other or other == player then return false end
+	if player.Team and other.Team and player.Team == other.Team then return true end
+	return false
+end
+
+-- ---------- ESP: Highlight ทะลุกำแพง + ป้ายชื่อ/ระยะ (เฉพาะศัตรู) ----------
+local function removeEspFrom(model)
+	local data = espApplied[model]
+	if not data then return end
+	espApplied[model] = nil
+	pcall(function()
+		if data.highlight then data.highlight:Destroy() end
+		if data.billboard then data.billboard:Destroy() end
+	end)
+end
+
+local function addEspTo(charModel)
+	if espApplied[charModel] then return end
+	local head = charModel:FindFirstChild("Head") or charModel:FindFirstChildWhichIsA("BasePart")
+	if not head then return end
+	local hl = Instance.new("Highlight")
+	hl.Name = "DevESP_Highlight" -- Boost FPS จะไม่แตะ Highlight ชื่อนี้
+	hl.FillColor = Color3.fromRGB(255, 45, 45)
+	hl.OutlineColor = Color3.fromRGB(255, 165, 0)
+	hl.FillTransparency = 0.65
+	hl.OutlineTransparency = 0
+	hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop -- เห็นทะลุกำแพง
+	hl.Parent = charModel
+	local bb = Instance.new("BillboardGui")
+	bb.Name = "DevESP_Billboard"
+	bb.Size = UDim2.new(0, 150, 0, 20)
+	bb.StudsOffset = Vector3.new(0, 2.4, 0)
+	bb.AlwaysOnTop = true
+	bb.MaxDistance = 2000
+	bb.Parent = head
+	local label = Instance.new("TextLabel")
+	label.Size = UDim2.fromScale(1, 1)
+	label.BackgroundTransparency = 0.4
+	label.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+	label.TextColor3 = Color3.fromRGB(255, 240, 130)
+	label.Font = Enum.Font.GothamBold
+	label.TextSize = 12
+	label.Text = charModel.Name
+	label.Parent = bb
+	espApplied[charModel] = { highlight = hl, billboard = bb, label = label }
+end
+
+-- ทวน ESP 4 ครั้ง/วินาที: เพิ่มศัตรูใหม่ / ลบคนตาย คนออก คนกลายเป็นเพื่อน
+local function refreshESP()
+	local enemies = {}
+	for _, other in ipairs(Players:GetPlayers()) do
+		if other ~= player and not isTeammate(other) then
+			local charModel = other.Character
+			if charModel and charModel.Parent then
+				local hum = charModel:FindFirstChildOfClass("Humanoid")
+				if hum and hum.Health > 0 then enemies[charModel] = true end
+			end
+		end
+	end
+	for model in pairs(espApplied) do
+		if not enemies[model] then removeEspFrom(model) end
+	end
+	for model in pairs(enemies) do
+		addEspTo(model)
+		local data = espApplied[model]
+		local part = model:FindFirstChild("HumanoidRootPart")
+		if data and part and rootPart then
+			local dist = math.floor((part.Position - rootPart.Position).Magnitude + 0.5)
+			data.label.Text = "[" .. dist .. "m] " .. model.Name
+		end
+	end
+end
+
+local function setESP(enabled)
+	espEnabled = enabled
+	if not espEnabled then
+		for model in pairs(espApplied) do removeEspFrom(model) end
+		devLog("lgEspOff")
+	else
+		refreshESP()
+		devLog("lgEspOn")
+	end
+end
+
+-- ---------- Aimbot: "ยิงในวง = โดน" (หักกล้องต่อเนื่องระหว่างกดยิง) ----------
+-- ไม่ล็อกกล้องถาวร: ทำงานเฉพาะตอนกด LMB ยิง และเป้าต้องอยู่ในวง FOV เท่านั้น
+-- วิธีทำ: หักกล้องไปหาเป้าทุกเฟรม + ชดเดาตำแหน่งเป้าที่กำลังวิ่ง → ปืนที่ยิงตามกล้องจะโดน
+-- ข้อจำกัดจริง: LocalScript ขยับกระสุนที่เซิร์ฟเวอร์สร้างไม่ได้ จึงโกงทิศทางกระสุนตรง ๆ ไม่ได้
+local function getAimPart(charModel)
+	if aimPartMode == 1 then
+		return charModel:FindFirstChild("Head")
+	elseif aimPartMode == 2 then
+		return charModel:FindFirstChild("HumanoidRootPart")
+	end
+	return charModel:FindFirstChild("UpperTorso") or charModel:FindFirstChild("Torso") or charModel:FindFirstChild("HumanoidRootPart")
+end
+
+-- รวมรายชื่อเป้า (ศัตรู + NPC ที่ยังมีชีวิต) ทุก 0.25 วิ
+local function refreshAimCandidates()
+	local list = {}
+	for _, other in ipairs(Players:GetPlayers()) do
+		if other ~= player and not isTeammate(other) then
+			local charModel = other.Character
+			if charModel then
+				local hum = charModel:FindFirstChildOfClass("Humanoid")
+				if hum and hum.Health > 0 and charModel:FindFirstChild("HumanoidRootPart") then
+					list[#list + 1] = { model = charModel }
+				end
+			end
+		end
+	end
+	-- NPC: Model ที่มี Humanoid ยังมีชีวิต และไม่ใช่ตัวละครของผู้เล่นคนไหน (รวมตัวเราด้วย)
+	for _, inst in ipairs(workspace:GetDescendants()) do
+		if inst:IsA("Model") and inst ~= character and not Players:GetPlayerFromCharacter(inst) then
+			local hum = inst:FindFirstChildOfClass("Humanoid")
+			if hum and hum.Health > 0 and inst:FindFirstChild("HumanoidRootPart") then
+				list[#list + 1] = { model = inst }
+			end
+		end
+	end
+	aimCandidates = list
+end
+
+-- เลือกเป้าที่มุมแคบสุดจากกล้อง (ต้องอยู่ในวง FOV, ไม่เกินระยะ, ไม่มีกำแพงบัง)
+local function findBestTarget()
+	local cam = workspace.CurrentCamera
+	if not cam then return nil end
+	local camPos = cam.CFrame.Position
+	local halfFov = math.rad(aimFov) / 2 -- รัศมีของวง = ครึ่งเส้นผ่านศูนย์กลาง
+	local bestModel, bestPart, bestAngle = nil, nil, halfFov
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	params.FilterDescendantsInstances = { character }
+	for _, cand in ipairs(aimCandidates) do
+		local charModel = cand.model
+		if charModel and charModel.Parent then
+			local part = getAimPart(charModel) or charModel:FindFirstChild("HumanoidRootPart")
+			if part then
+				local toTarget = part.Position - camPos
+				local dist = toTarget.Magnitude
+				if dist > 1 and dist <= aimRange then
+					local angle = math.acos(math.clamp(cam.CFrame.LookVector:Dot(toTarget / dist), -1, 1))
+					if angle <= bestAngle then
+						-- เช็กการมองเห็น: ยิงรังสีจากกล้อง → ถ้าชนอย่างอื่นก่อนถึงตัว = ถูกบัง ข้ามเป้านี้
+						local hit = workspace:Raycast(camPos, toTarget, params)
+						local visible = true
+						if hit then
+							visible = hit.Instance:IsDescendantOf(charModel)
+						end
+						if visible then
+							bestModel, bestPart, bestAngle = charModel, part, angle
+						end
+					end
+				end
+			end
+		end
+	end
+	return bestModel, bestPart
+end
+
+-- จุดเล็ง = ตำแหน่งเป้า + ความเร็วของเป้า × เวลากระสุนโดยประมาณ (ชดเดาให้โดนตอนเป้ากำลังวิ่ง)
+local function predictedAimPosition(part, charModel)
+	local pos = part.Position
+	local root = charModel:FindFirstChild("HumanoidRootPart")
+	if root and rootPart then
+		local dist = (pos - workspace.CurrentCamera.CFrame.Position).Magnitude
+		local leadTime = math.clamp(dist / 900, 0, 0.35)
+		pos = pos + root.AssemblyLinearVelocity * leadTime
+	end
+	return pos
+end
+
+-- หักกล้องไปหาเป้าแบบนุ่ม — เรียกทุกเฟรมผ่าน BindToRenderStep (หลังกล้องเกม)
+local function aimCameraStep()
+	if not (aimbotEnabled and fireAiming) then return end
+	local cam = workspace.CurrentCamera
+	if not cam then return end
+	local charModel, part = findBestTarget()
+	if not charModel or not part then return end
+	local aimPos = predictedAimPosition(part, charModel)
+	local toAim = aimPos - cam.CFrame.Position
+	if toAim.Magnitude < 0.5 then return end
+	local alpha = math.clamp(aimSmooth / 100, 0.05, 1) -- 100 = หักทันที, ต่ำกว่า = นุ่มกว่า
+	local newLook = cam.CFrame.LookVector:Lerp(toAim.Unit, alpha)
+	cam.CFrame = CFrame.new(cam.CFrame.Position, cam.CFrame.Position + newLook)
+end
+
+-- วงกลม FOV กลางจอ (วาดด้วย Frame กลม ไม่พึ่ง Drawing API)
+local function updateFovCircle()
+	if not fovCircle then return end
+	fovCircle.Visible = fovCircleEnabled
+	if not fovCircleEnabled then return end
+	local cam = workspace.CurrentCamera
+	if not cam then return end
+	-- แปลงองศาของวงเป็นพิกเซล โดยเทียบกับมุมมองกล้องปัจจุบัน
+	local ratio = math.tan(math.rad(aimFov) / 2) / math.tan(math.rad(cam.FieldOfView) / 2)
+	local diameter = math.clamp(2 * ratio * (cam.ViewportSize.Y / 2), 8, 3000)
+	fovCircle.Size = UDim2.fromOffset(diameter, diameter)
+end
+
+-- เช็กว่าจุดที่คลิกอยู่ในหน้าต่างเมนูไหม (กัน Aimbot ทำงานตอนคลิกปุ่มเมนู)
+local function isPointerInsideMenu(input)
+	if not mainWindow or not mainWindow.Visible then return false end
+	local p = input.Position
+	local absPos, absSize = mainWindow.AbsolutePosition, mainWindow.AbsoluteSize
+	return p.X >= absPos.X and p.X <= absPos.X + absSize.X and p.Y >= absPos.Y and p.Y <= absPos.Y + absSize.Y
+end
+
+-- ดักปุ่มยิง: กดซ้ายค้าง = เริ่มหักกล้อง | ปล่อย = หยุดทันที (คลิกในเมนูจะไม่ทำงาน)
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+	if gameProcessed then return end
+	if input.UserInputType == Enum.UserInputType.MouseButton1 and not isPointerInsideMenu(input) then
+		fireAiming = true
+	end
+end)
+UserInputService.InputEnded:Connect(function(input)
+	-- ปล่อยเมาส์หรือยกนิ้ว (ทัช) = หยุดยิงทันที
+	if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+		fireAiming = false
+		if ui.fireButton and ui.fireButton.Visible then
+			ui.fireButton.BackgroundColor3 = COLOR_ACCENT
+		end
+	end
+end)
+
+local function setAimbot(enabled)
+	aimbotEnabled = enabled
+	fireAiming = false
+	if ui.fireButton then ui.fireButton.Visible = aimbotEnabled end -- ปุ่ม 🔥 (ใช้ได้ทั้งเมาส์และทัช)
+	if aimbotEnabled then
+		refreshAimCandidates()
+		devLog("lgAimbotOn")
+	else
+		devLog("lgAimbotOff")
+	end
+end
+
+local function cycleAimPart()
+	aimPartMode = (aimPartMode % #AIM_PARTS.th) + 1
+	devLog("lgAimPart", aimPartName())
+	if refreshToggles then refreshToggles() end
+end
+
+local function setFovCircle(enabled)
+	fovCircleEnabled = enabled
+	updateFovCircle()
+end
+
+-- ---------- รีโหลดไว (ทำงานกับปืนที่เก็บเวลาโหลดใน Value/Attribute ของ Tool) ----------
+-- ข้อจำกัดของ Roblox: LocalScript แตะตัวแปรใน LocalScript ของปืนไม่ได้ → ถ้าเกมเก็บเวลาโหลดในโค้ด โหมดนี้จะไม่มีผล
+local FAST_RELOAD_TIME = 0.05 -- วินาทีที่เร่งไป
+
+local function isReloadTimeName(name)
+	-- จับชื่อที่มีคำว่า reload เช่น ReloadTime, reloadDelay, ReloadCooldown
+	return string.find(string.lower(name), "reload", 1, true) ~= nil
+end
+
+local function scanToolsForReload()
+	if not fastReloadEnabled or not character then return end
+	local tools = {}
+	for _, child in ipairs(character:GetChildren()) do
+		if child:IsA("Tool") then tools[#tools + 1] = child end
+	end
+	local backpack = player:FindFirstChildOfClass("Backpack")
+	if backpack then
+		for _, child in ipairs(backpack:GetChildren()) do
+			if child:IsA("Tool") then tools[#tools + 1] = child end
+		end
+	end
+	for _, tool in ipairs(tools) do
+		-- Value ที่เก็บเวลาโหลด (เช่น NumberValue "ReloadTime")
+		for _, valueObj in ipairs(tool:GetDescendants()) do
+			if (valueObj:IsA("NumberValue") or valueObj:IsA("IntValue")) and isReloadTimeName(valueObj.Name) then
+				if not reloadTracked[valueObj] then
+					reloadTracked[valueObj] = true
+					table.insert(reloadBackup, { inst = valueObj, attr = nil, value = valueObj.Value })
+				end
+				if valueObj.Value > FAST_RELOAD_TIME then valueObj.Value = FAST_RELOAD_TIME end
+			end
+		end
+		-- Attribute บน Tool ที่เป็นตัวเลขและชื่อเกี่ยวกับ reload
+		for attrName, attrValue in pairs(tool:GetAttributes()) do
+			if typeof(attrValue) == "number" and isReloadTimeName(attrName) then
+				local key = tostring(tool) .. "|" .. attrName
+				if not reloadTracked[key] then
+					reloadTracked[key] = true
+					table.insert(reloadBackup, { inst = tool, attr = attrName, value = attrValue })
+				end
+				if attrValue > FAST_RELOAD_TIME then tool:SetAttribute(attrName, FAST_RELOAD_TIME) end
+			end
+		end
+	end
+end
+
+local function setFastReload(enabled)
+	fastReloadEnabled = enabled
+	if fastReloadEnabled then
+		scanToolsForReload()
+		devLog("lgReloadOn")
+	else
+		for _, item in ipairs(reloadBackup) do
+			pcall(function()
+				if item.inst.Parent then
+					if item.attr then item.inst:SetAttribute(item.attr, item.value)
+					else item.inst.Value = item.value end
+				end
+			end)
+		end
+		reloadBackup = {}
+		reloadTracked = {}
+		devLog("lgReloadOff")
+	end
 end
 
 -- ===================== GUI =====================
@@ -537,7 +1108,7 @@ local function addCorner(inst, radius)
 	return c
 end
 
-local function makeButton(text, parent, size, position, callback)
+local function makeButton(key, parent, size, position, callback)
 	local button = Instance.new("TextButton")
 	button.Size = size
 	button.Position = position
@@ -545,9 +1116,10 @@ local function makeButton(text, parent, size, position, callback)
 	button.TextColor3 = COLOR_TEXT
 	button.Font = FONT
 	button.TextSize = 14
-	button.Text = text
 	button.AutoButtonColor = false
+	button:SetAttribute("DevThemeRole", "button") -- ธีม: ปุ่มธรรมดา (ทาสีใหม่ตอนเปลี่ยนธีม)
 	addCorner(button, 6)
+	bindText(button, key) -- ข้อความผูกกับ key ภาษา
 	button.MouseEnter:Connect(function() button.BackgroundColor3 = COLOR_BTN_HOVER end)
 	button.MouseLeave:Connect(function() button.BackgroundColor3 = COLOR_BTN end)
 	button.MouseButton1Click:Connect(function() if callback then callback() end end)
@@ -555,7 +1127,7 @@ local function makeButton(text, parent, size, position, callback)
 	return button
 end
 
-local function makeToggleButton(name, parent, size, position, getState, onToggle)
+local function makeToggleButton(key, parent, size, position, getState, onToggle)
 	local button = Instance.new("TextButton")
 	button.Size = size
 	button.Position = position
@@ -563,9 +1135,10 @@ local function makeToggleButton(name, parent, size, position, getState, onToggle
 	button.TextColor3 = COLOR_TEXT
 	button.Font = FONT
 	button.TextSize = 14
-	button.Text = name
 	button.AutoButtonColor = false
+	button:SetAttribute("DevThemeRole", "button") -- ธีม: ปุ่ม (refreshToggles จะทับสีตอนเปิด)
 	addCorner(button, 6)
+	bindText(button, key)
 	button.MouseEnter:Connect(function() if not getState() then button.BackgroundColor3 = COLOR_BTN_HOVER end end)
 	button.MouseLeave:Connect(function() if not getState() then button.BackgroundColor3 = COLOR_BTN end end)
 	button.MouseButton1Click:Connect(function()
@@ -573,11 +1146,11 @@ local function makeToggleButton(name, parent, size, position, getState, onToggle
 		refreshToggles()
 	end)
 	button.Parent = parent
-	table.insert(toggleRegistry, { button = button, name = name, getState = getState })
+	table.insert(toggleRegistry, { button = button, key = key, getState = getState })
 	return button
 end
 
-local function makeLabel(text, parent, size, position, textColor, textSize)
+local function makeLabel(key, parent, size, position, textColor, textSize)
 	local label = Instance.new("TextLabel")
 	label.Size = size
 	label.Position = position
@@ -588,13 +1161,21 @@ local function makeLabel(text, parent, size, position, textColor, textSize)
 	label.TextXAlignment = Enum.TextXAlignment.Left
 	label.TextYAlignment = Enum.TextYAlignment.Top
 	label.TextWrapped = true
-	label.Text = text
+	-- ธีม: จดจำ role ของสีตัวอักษรไว้ใช้ตอนเปลี่ยนธีม
+	if textColor == COLOR_DIM then
+		label:SetAttribute("DevThemeRole", "dim")
+	elseif textColor == COLOR_ACCENT then
+		label:SetAttribute("DevThemeRole", "accent")
+	else
+		label:SetAttribute("DevThemeRole", "text")
+	end
+	bindText(label, key)
 	label.Parent = parent
 	return label
 end
 
--- สไลเดอร์ (รองรับทั้งเมาส์และทัช)
-local function makeSlider(parent, containerY, labelText, minValue, maxValue, initialValue, onChange)
+-- สไลเดอร์ (รองรับทั้งเมาส์และทัช) — ข้อความ caption ผูกกับ key ภาษา
+local function makeSlider(parent, containerY, key, minValue, maxValue, initialValue, onChange)
 	local value = initialValue
 	local fraction = (initialValue - minValue) / (maxValue - minValue)
 
@@ -611,7 +1192,8 @@ local function makeSlider(parent, containerY, labelText, minValue, maxValue, ini
 	caption.TextSize = 13
 	caption.TextColor3 = COLOR_TEXT
 	caption.TextXAlignment = Enum.TextXAlignment.Left
-	caption.Text = labelText .. ": " .. value
+	caption:SetAttribute("DevThemeRole", "text") -- ธีม
+	caption.Text = T(key) .. ": " .. value
 	caption.Parent = container
 
 	local track = Instance.new("Frame")
@@ -619,6 +1201,7 @@ local function makeSlider(parent, containerY, labelText, minValue, maxValue, ini
 	track.Position = UDim2.new(0, 0, 0, 30)
 	track.BackgroundColor3 = COLOR_BTN
 	track.BorderSizePixel = 0
+	track:SetAttribute("DevThemeRole", "button") -- ธีม
 	track.Parent = container
 	addCorner(track, 4)
 
@@ -626,6 +1209,7 @@ local function makeSlider(parent, containerY, labelText, minValue, maxValue, ini
 	fill.Size = UDim2.new(fraction, 0, 1, 0)
 	fill.BackgroundColor3 = COLOR_ACCENT
 	fill.BorderSizePixel = 0
+	fill:SetAttribute("DevThemeRole", "accentFill") -- ธีม
 	fill.Parent = track
 	addCorner(fill, 4)
 
@@ -635,17 +1219,22 @@ local function makeSlider(parent, containerY, labelText, minValue, maxValue, ini
 	knob.BackgroundColor3 = COLOR_TEXT
 	knob.Text = ""
 	knob.AutoButtonColor = false
+	knob:SetAttribute("DevThemeRole", "knob") -- ธีม
 	knob.Parent = track
 	addCorner(knob, 9)
 
 	local isDragging = false
+
+	local function getValue()
+		return value
+	end
 
 	local function setFromFraction(f)
 		fraction = math.clamp(f, 0, 1)
 		value = math.floor(minValue + (maxValue - minValue) * fraction + 0.5)
 		fill.Size = UDim2.new(fraction, 0, 1, 0)
 		knob.Position = UDim2.new(fraction, -9, 0.5, -9)
-		caption.Text = labelText .. ": " .. value
+		caption.Text = T(key) .. ": " .. value
 		if onChange then onChange(value) end
 	end
 
@@ -675,8 +1264,36 @@ local function makeSlider(parent, containerY, labelText, minValue, maxValue, ini
 		if isDown(input) then isDragging = false end
 	end)
 
+	table.insert(sliderRegistry, { caption = caption, key = key, getValue = getValue })
 	setFromFraction(fraction)
-	return { caption = caption, setFromFraction = setFromFraction }
+	return { caption = caption, setFromFraction = setFromFraction, getValue = getValue }
+end
+
+-- สร้างชุดสีธีมจากโทนสี (HSL) — เรียกแล้ว COLOR_* เปลี่ยน → hover/ปุ่มใหม่ใช้ค่าใหม่ตามไปด้วย
+local function hslToColor(h, s, l)
+	h = h % 360
+	local c = (1 - math.abs(2 * l - 1)) * s
+	local x = c * (1 - math.abs((h / 60) % 2 - 1))
+	local m = l - c / 2
+	local r, g, b = 0, 0, 0
+	if h < 60 then r, g, b = c, x, 0
+	elseif h < 120 then r, g, b = x, c, 0
+	elseif h < 180 then r, g, b = 0, c, x
+	elseif h < 240 then r, g, b = 0, x, c
+	elseif h < 300 then r, g, b = x, 0, c
+	else r, g, b = c, 0, x end
+	return Color3.fromRGB(math.floor((r + m) * 255 + 0.5), math.floor((g + m) * 255 + 0.5), math.floor((b + m) * 255 + 0.5))
+end
+
+local function themeFromHue(h)
+	COLOR_ACCENT  = hslToColor(h, 0.62, 0.66)
+	COLOR_ACCENT2 = hslToColor(h + 180, 0.7, 0.6)
+	COLOR_BAR     = hslToColor(h, 0.42, 0.14)
+	COLOR_BTN     = hslToColor(h, 0.38, 0.2)
+	COLOR_BTN_HOVER = hslToColor(h, 0.45, 0.3)
+	COLOR_TEXT    = hslToColor(h, 0.25, 0.93)
+	COLOR_DIM     = hslToColor(h, 0.3, 0.62)
+	COLOR_DARK    = hslToColor(h, 0.45, 0.07)
 end
 
 local screenGui = Instance.new("ScreenGui")
@@ -684,6 +1301,32 @@ screenGui.Name = "DevUtilitySuiteV2"
 screenGui.ResetOnSpawn = false
 screenGui.DisplayOrder = 20
 screenGui.Parent = playerGui
+
+-- วงกลม FOV ของ Aimbot (Frame กลมกลางจอ ไม่ใช้ Drawing API เผื่อเกมปิดไว้)
+fovGui = Instance.new("ScreenGui")
+fovGui.Name = "DevAimFovGui"
+fovGui.ResetOnSpawn = false
+fovGui.IgnoreGuiInset = true
+fovGui.DisplayOrder = 21
+fovGui.Parent = playerGui
+
+fovCircle = Instance.new("Frame")
+fovCircle.Name = "DevAimFovCircle"
+fovCircle.AnchorPoint = Vector2.new(0.5, 0.5)
+fovCircle.Position = UDim2.fromScale(0.5, 0.5)
+fovCircle.Size = UDim2.fromOffset(120, 120)
+fovCircle.BackgroundTransparency = 1
+fovCircle.BorderSizePixel = 0
+fovCircle.Visible = false
+local fovCorner = Instance.new("UICorner")
+fovCorner.CornerRadius = UDim.new(1, 0) -- โค้งเต็มที่ = วงกลม
+fovCorner.Parent = fovCircle
+local fovStroke = Instance.new("UIStroke")
+fovStroke.Color = COLOR_ACCENT2
+fovStroke.Thickness = 1.5
+fovStroke.Transparency = 0.2
+fovStroke.Parent = fovCircle
+fovCircle.Parent = fovGui
 
 local menuToggleButton = Instance.new("TextButton")
 menuToggleButton.Size = UDim2.new(0, 44, 0, 44)
@@ -795,10 +1438,10 @@ contentFrame.Position = UDim2.new(0, 126, 0, 48)
 contentFrame.BackgroundTransparency = 1
 contentFrame.Parent = mainWindow
 
-local tabNames = { "🏠 หน้าหลัก", "🎭 ตัวละคร", "🧭 สร้าง/วาร์ป", "⚡ ประสิทธิภาพ" }
 local tabButtons, tabFrames = {}, {}
 
 local function switchTab(index)
+	currentTab = index -- จำแท็บปัจจุบันไว้ใช้ตอนเปลี่ยนธีม/ภาษา
 	for i, frame in ipairs(tabFrames) do frame.Visible = (i == index) end
 	for i, button in ipairs(tabButtons) do
 		button.BackgroundColor3 = (i == index) and COLOR_ACCENT or COLOR_BTN
@@ -806,16 +1449,17 @@ local function switchTab(index)
 	end
 end
 
-for index, name in ipairs(tabNames) do
+for index = 1, 7 do -- 7 แท็บ: หน้าหลัก / ตัวละคร / สร้างวาร์ป / ต่อสู้ / ประสิทธิภาพ / ตั้งค่า / ประวัติ
 	local tabButton = Instance.new("TextButton")
 	tabButton.Size = UDim2.new(1, -8, 0, 34)
 	tabButton.BackgroundColor3 = COLOR_BTN
 	tabButton.TextColor3 = COLOR_TEXT
 	tabButton.Font = FONT
 	tabButton.TextSize = 12
-	tabButton.Text = name
 	tabButton.AutoButtonColor = false
+	tabButton:SetAttribute("DevThemeRole", "button") -- ธีม
 	addCorner(tabButton, 6)
+	bindText(tabButton, "tab" .. index) -- ชื่อแท็บตามภาษา
 	tabButton.Parent = tabBar
 	tabButtons[index] = tabButton
 	tabButton.MouseButton1Click:Connect(function() switchTab(index) end)
@@ -830,61 +1474,85 @@ end
 
 -- ---------- แท็บ 1: หน้าหลัก ----------
 local homeTab = tabFrames[1]
-ui.posLabel = makeLabel("พิกัดตัวละคร: (ยังไม่มีตัวละคร)", homeTab, UDim2.new(1, 0, 0, 26), UDim2.new(0, 4, 0, 8))
-ui.fpsLabel = makeLabel("FPS: -- | Ping: -- ms", homeTab, UDim2.new(1, 0, 0, 26), UDim2.new(0, 4, 0, 38))
-ui.timeLabel = makeLabel("เวลาที่เปิดใช้งาน: 00:00:00", homeTab, UDim2.new(1, 0, 0, 26), UDim2.new(0, 4, 0, 68))
-ui.statusLabel = makeLabel(statusString(), homeTab, UDim2.new(1, 0, 0, 56), UDim2.new(0, 4, 0, 98))
-makeLabel("🎮 คีย์ลัด: B = เสก Part ทดสอบ | T = วาร์ปไปจุดที่เมาส์ | F3 = วิ่งเร็ว", homeTab, UDim2.new(1, 0, 0, 44), UDim2.new(0, 4, 0, 160), COLOR_DIM, 13)
-makeLabel("💡 ปุ่ม ☰ เปิดเมนู / ✕ ปิดเมนู | ลากแถบชื่อเพื่อย้ายหน้าต่าง | เลือกโหมดจากแถบด้านซ้าย", homeTab, UDim2.new(1, 0, 0, 70), UDim2.new(0, 4, 0, 210), COLOR_DIM, 13)
+ui.posLabel = makeLabel("homePos", homeTab, UDim2.new(1, 0, 0, 26), UDim2.new(0, 4, 0, 8))
+ui.fpsLabel = makeLabel("homeFps", homeTab, UDim2.new(1, 0, 0, 26), UDim2.new(0, 4, 0, 38))
+ui.timeLabel = makeLabel("uptime", homeTab, UDim2.new(1, 0, 0, 26), UDim2.new(0, 4, 0, 68))
+ui.statusLabel = makeLabel("stLine1", homeTab, UDim2.new(1, 0, 0, 56), UDim2.new(0, 4, 0, 98))
+makeLabel("keybindHint", homeTab, UDim2.new(1, 0, 0, 44), UDim2.new(0, 4, 0, 160), COLOR_DIM, 13)
+makeLabel("howtoHint", homeTab, UDim2.new(1, 0, 0, 70), UDim2.new(0, 4, 0, 210), COLOR_DIM, 13)
+-- 📈 สถิติ FPS/Ping (ต่ำ/เฉลี่ย/สูง จาก 12 วินาทีล่าสุด) + กราฟแท่ง
+ui.statLabel = makeLabel("statFps", homeTab, UDim2.new(1, 0, 0, 36), UDim2.new(0, 4, 0, 284), COLOR_DIM, 12)
+local graphFrame = Instance.new("Frame")
+graphFrame.Size = UDim2.new(1, -8, 0, 44)
+graphFrame.Position = UDim2.new(0, 4, 0, 324)
+graphFrame.BackgroundColor3 = COLOR_BAR
+graphFrame.BorderSizePixel = 0
+graphFrame:SetAttribute("DevThemeRole", "bar") -- ธีม
+addCorner(graphFrame, 6)
+graphFrame.Parent = homeTab
+for i = 1, FPS_GRAPH_SAMPLES do
+	local bar = Instance.new("Frame")
+	bar.AnchorPoint = Vector2.new(0, 1)
+	bar.Size = UDim2.new(1 / FPS_GRAPH_SAMPLES, -2, 0, 0)
+	bar.Position = UDim2.new((i - 1) / FPS_GRAPH_SAMPLES, 2, 1, -3)
+	bar.BackgroundColor3 = COLOR_ACCENT
+	bar.BorderSizePixel = 0
+	addCorner(bar, 2)
+	bar.Parent = graphFrame
+	fpsGraphBars[i] = bar
+end
 
 -- ---------- แท็บ 2: ตัวละคร ----------
 local charTab = tabFrames[2]
 local fullBtnSize = UDim2.new(1, 0, 0, 38)
-makeToggleButton("🏃 โหมดวิ่งเร็ว", charTab, fullBtnSize, UDim2.new(0, 0, 0, 8),
+makeToggleButton("btnSpeed", charTab, fullBtnSize, UDim2.new(0, 0, 0, 8),
 	function() return speedMode end,
 	function() setSpeedMode(not speedMode) end)
-makeToggleButton("👻 NoClip (ทะลุกำแพง)", charTab, fullBtnSize, UDim2.new(0, 0, 0, 52),
+makeToggleButton("btnNoClip", charTab, fullBtnSize, UDim2.new(0, 0, 0, 52),
 	function() return noClipEnabled end,
 	function() setNoClip(not noClipEnabled) end)
-makeToggleButton("🚀 โหมดบิน (WASD)", charTab, fullBtnSize, UDim2.new(0, 0, 0, 96),
+makeToggleButton("btnFly", charTab, fullBtnSize, UDim2.new(0, 0, 0, 96),
 	function() return flyEnabled end,
 	function() setFly(not flyEnabled) end)
-makeButton("❤️ รีเลือดเต็ม", charTab, fullBtnSize, UDim2.new(0, 0, 0, 140), function()
-	if humanoid then humanoid.Health = humanoid.MaxHealth end
+makeButton("btnHeal", charTab, fullBtnSize, UDim2.new(0, 0, 0, 140), function()
+	if humanoid then
+		humanoid.Health = humanoid.MaxHealth
+		devLog("lgHeal")
+	end
 end)
-local walkSlider = makeSlider(charTab, 186, "🏃 ความเร็ววิ่ง", 16, 300, walkSpeedValue, function(v)
+local walkSlider = makeSlider(charTab, 186, "slWalk", 16, 300, walkSpeedValue, function(v)
 	walkSpeedValue = v
 	if speedMode then applyWalkSpeed() end -- ใช้ค่าใหม่ทันที
 end)
 ui.walkSpeedLabel = walkSlider.caption
-local flySlider = makeSlider(charTab, 238, "🚀 ความเร็วบิน", 25, 500, flySpeed, function(v) flySpeed = v end)
+local flySlider = makeSlider(charTab, 238, "slFly", 25, 500, flySpeed, function(v) flySpeed = v end)
 ui.flySpeedLabel = flySlider.caption
-makeLabel("💡 ลากจุดกลมเพื่อปรับค่า | โหมดบิน: WASD ตามกล้อง, Space ขึ้น, Ctrl ลง", charTab, UDim2.new(1, 0, 0, 60), UDim2.new(0, 4, 0, 292), COLOR_DIM, 13)
+makeLabel("tipChar", charTab, UDim2.new(1, 0, 0, 60), UDim2.new(0, 4, 0, 292), COLOR_DIM, 13)
 
 -- ---------- แท็บ 3: สร้างของ & วาร์ป ----------
 local spawnTab = tabFrames[3]
-makeButton("🧱 เสก Part ทดสอบ (B)", spawnTab, UDim2.new(0.5, -6, 0, 34), UDim2.new(0, 0, 0, 6), spawnTestPart)
-makeButton("📍 วาร์ปไปจุดที่ชี้ (T)", spawnTab, UDim2.new(0.5, -6, 0, 34), UDim2.new(0.5, 6, 0, 6), teleportToMouse)
-makeButton("🧹 ล้างของที่เสกทั้งหมด", spawnTab, UDim2.new(0.5, -6, 0, 34), UDim2.new(0, 0, 0, 44), cleanUp)
-makeButton("⭐ บันทึก Waypoint", spawnTab, UDim2.new(0.5, -6, 0, 34), UDim2.new(0.5, 6, 0, 44), saveWaypoint)
-makeLabel("— 🌀 ระบบประตูวาร์ป (Auto Gate) —", spawnTab, UDim2.new(1, 0, 0, 22), UDim2.new(0, 4, 0, 84), COLOR_ACCENT, 14)
-ui.point1Label = makeLabel("Point 1: (ยังไม่ได้บันทึก)", spawnTab, UDim2.new(1, 0, 0, 20), UDim2.new(0, 4, 0, 108), COLOR_DIM, 13)
-ui.point2Label = makeLabel("Point 2: (ยังไม่ได้บันทึก)", spawnTab, UDim2.new(1, 0, 0, 20), UDim2.new(0, 4, 0, 128), COLOR_DIM, 13)
-makeButton("🚩 บันทึก Point 1", spawnTab, UDim2.new(0.5, -6, 0, 34), UDim2.new(0, 0, 0, 152), function()
+makeButton("btnSpawnPart", spawnTab, UDim2.new(0.5, -6, 0, 34), UDim2.new(0, 0, 0, 6), spawnTestPart)
+makeButton("btnTeleportMouse", spawnTab, UDim2.new(0.5, -6, 0, 34), UDim2.new(0.5, 6, 0, 6), teleportToMouse)
+makeButton("btnCleanUp", spawnTab, UDim2.new(0.5, -6, 0, 34), UDim2.new(0, 0, 0, 44), cleanUp)
+makeButton("btnSaveWp", spawnTab, UDim2.new(0.5, -6, 0, 34), UDim2.new(0.5, 6, 0, 44), saveWaypoint)
+makeLabel("gateHeader", spawnTab, UDim2.new(1, 0, 0, 22), UDim2.new(0, 4, 0, 84), COLOR_ACCENT, 14)
+ui.point1Label = makeLabel("p1Label", spawnTab, UDim2.new(1, 0, 0, 20), UDim2.new(0, 4, 0, 108), COLOR_DIM, 13)
+ui.point2Label = makeLabel("p2Label", spawnTab, UDim2.new(1, 0, 0, 20), UDim2.new(0, 4, 0, 128), COLOR_DIM, 13)
+makeButton("btnSaveP1", spawnTab, UDim2.new(0.5, -6, 0, 34), UDim2.new(0, 0, 0, 152), function()
 	if rootPart then
 		point1 = rootPart.CFrame
-		print("[DevUtilityV2] บันทึก Point 1 ที่ " .. formatVector3(point1.Position))
+		devLog("lgP1Saved", formatVector3(point1.Position))
 		refreshToggles()
 	else
-		print("[DevUtilityV2] ยังไม่มีตัวละคร")
+		devLog("lgNoChar")
 	end
 end)
-makeButton("🌀 สร้างประตูวาร์ป", spawnTab, UDim2.new(0.5, -6, 0, 34), UDim2.new(0.5, 6, 0, 152), function()
+makeButton("btnBuildGate", spawnTab, UDim2.new(0.5, -6, 0, 34), UDim2.new(0.5, 6, 0, 152), function()
 	buildGate()
 	refreshToggles()
 end)
-makeLabel("— 📌 Waypoint —", spawnTab, UDim2.new(0.5, -6, 0, 22), UDim2.new(0, 4, 0, 194), COLOR_ACCENT, 14)
-ui.waypointCountLabel = makeLabel("ที่บันทึก: 0 จุด", spawnTab, UDim2.new(0.5, -6, 0, 22), UDim2.new(0.5, 6, 0, 194), COLOR_DIM, 13)
+makeLabel("wpHeader", spawnTab, UDim2.new(0.5, -6, 0, 22), UDim2.new(0, 4, 0, 194), COLOR_ACCENT, 14)
+ui.waypointCountLabel = makeLabel("wpCount", spawnTab, UDim2.new(0.5, -6, 0, 22), UDim2.new(0.5, 6, 0, 194), COLOR_DIM, 13)
 
 waypointListFrame = Instance.new("ScrollingFrame")
 waypointListFrame.Size = UDim2.new(1, 0, 1, -232)
@@ -894,6 +1562,7 @@ waypointListFrame.BorderSizePixel = 0
 waypointListFrame.ScrollBarThickness = 6
 waypointListFrame.ScrollBarImageColor3 = COLOR_ACCENT
 waypointListFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
+waypointListFrame:SetAttribute("DevThemeRole", "bar") -- ธีม
 addCorner(waypointListFrame, 6)
 waypointListFrame.Parent = spawnTab
 
@@ -916,28 +1585,144 @@ rebuildWaypointList = function()
 		row.BackgroundColor3 = COLOR_BTN
 		row.BorderSizePixel = 0
 		row.LayoutOrder = wpIndex
+		row:SetAttribute("DevThemeRole", "button") -- ธีม (Frame มีแค่พื้นหลัง)
 		addCorner(row, 6)
 		row.Parent = waypointListFrame
 		makeLabel(string.format("%d. %s", wpIndex, formatVector3(wp.cFrame.Position)), row, UDim2.new(1, -152, 1, 0), UDim2.new(0, 8, 0, 8), COLOR_TEXT, 12)
-		makeButton("วาร์ป", row, UDim2.new(0, 66, 1, -8), UDim2.new(1, -146, 0, 4), function() teleportToWaypoint(wpIndex) end)
-		makeButton("ลบ", row, UDim2.new(0, 66, 1, -8), UDim2.new(1, -74, 0, 4), function() deleteWaypoint(wpIndex) end)
+		makeButton("wpTeleport", row, UDim2.new(0, 66, 1, -8), UDim2.new(1, -146, 0, 4), function() teleportToWaypoint(wpIndex) end)
+		makeButton("wpDelete", row, UDim2.new(0, 66, 1, -8), UDim2.new(1, -74, 0, 4), function() deleteWaypoint(wpIndex) end)
 	end
 end
 
--- ---------- แท็บ 4: ประสิทธิภาพ ----------
-local perfTab = tabFrames[4]
-makeToggleButton("⚡ Boost FPS (ดินน้ำมัน/ปิดเอฟเฟก)", perfTab, UDim2.new(1, 0, 0, 38), UDim2.new(0, 0, 0, 8),
+-- ---------- แท็บ 4: ต่อสู้ (Aimbot + ESP + รีโหลดไว) ----------
+local aimTab = tabFrames[4]
+makeLabel("aimSec", aimTab, UDim2.new(1, 0, 0, 20), UDim2.new(0, 4, 0, 4), COLOR_ACCENT, 13)
+makeToggleButton("btnAimbot", aimTab, UDim2.new(1, 0, 0, 30), UDim2.new(0, 0, 0, 26),
+	function() return aimbotEnabled end,
+	function() setAimbot(not aimbotEnabled) end)
+local fovSlider = makeSlider(aimTab, 60, "slFov", 5, 120, aimFov, function(v) aimFov = v end)
+ui.fovLabel = fovSlider.caption
+local rangeSlider = makeSlider(aimTab, 104, "slRange", 10, 1000, aimRange, function(v) aimRange = v end)
+ui.rangeLabel = rangeSlider.caption
+local smoothSlider = makeSlider(aimTab, 148, "slSmooth", 1, 100, aimSmooth, function(v) aimSmooth = v end)
+ui.smoothLabel = smoothSlider.caption
+ui.aimPartButton = makeButton("btnAimPart", aimTab, UDim2.new(1, 0, 0, 30), UDim2.new(0, 0, 0, 194), cycleAimPart)
+makeToggleButton("btnFovCircle", aimTab, UDim2.new(1, 0, 0, 30), UDim2.new(0, 0, 0, 228),
+	function() return fovCircleEnabled end,
+	function() setFovCircle(not fovCircleEnabled) end)
+makeLabel("espSec", aimTab, UDim2.new(1, 0, 0, 20), UDim2.new(0, 4, 0, 262), COLOR_ACCENT, 13)
+makeToggleButton("btnEsp", aimTab, UDim2.new(1, 0, 0, 30), UDim2.new(0, 0, 0, 284),
+	function() return espEnabled end,
+	function() setESP(not espEnabled) end)
+makeToggleButton("btnFastReload", aimTab, UDim2.new(1, 0, 0, 30), UDim2.new(0, 0, 0, 318),
+	function() return fastReloadEnabled end,
+	function() setFastReload(not fastReloadEnabled) end)
+
+-- ปุ่ม 🔥 ยิงแบบกดค้าง — สำหรับทัช/มือถือ (ใช้กับเมาส์ได้)
+-- วางเป็นลูกของ screenGui (นอกหน้าต่างเมนู) กันระบบดักคลิก "นอกเมนู" ของ Aimbot ทำงานผิด
+ui.fireButton = Instance.new("TextButton")
+ui.fireButton.Size = UDim2.new(0, 56, 0, 56)
+ui.fireButton.Position = UDim2.new(1, -68, 1, -68)
+ui.fireButton.BackgroundColor3 = COLOR_ACCENT
+ui.fireButton.TextColor3 = COLOR_DARK
+ui.fireButton.Font = FONT
+ui.fireButton.TextSize = 26
+ui.fireButton.Text = "🔥"
+ui.fireButton.AutoButtonColor = false
+ui.fireButton.Visible = false -- แสดงเมื่อเปิด Aimbot เท่านั้น (setAimbot)
+ui.fireButton:SetAttribute("DevThemeRole", "accentFill") -- ธีม: พื้นหลังโทน accent เสมอ
+addCorner(ui.fireButton, 28) -- ทรงกลมเต็ม (รัศมี 28 บนปุ่ม 56)
+ui.fireButton.Parent = screenGui
+ui.fireButton.InputBegan:Connect(function(input)
+	-- กด/แตะค้าง = เริ่มยิง (ทัช: แตะค้างไว้บนปุ่ม | เมาส์: กดซ้ายค้าง)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+		fireAiming = true
+		ui.fireButton.BackgroundColor3 = COLOR_DARK -- สถานะ "กดค้าง"
+	end
+end)
+
+-- ---------- แท็บ 5: ประสิทธิภาพ ----------
+local perfTab = tabFrames[5]
+makeToggleButton("btnBoost", perfTab, UDim2.new(1, 0, 0, 38), UDim2.new(0, 0, 0, 8),
 	function() return boostBackup ~= nil end,
 	function()
 		if boostBackup then
-			ui.boostSummary.Text = restoreBoostFPS()
+			restoreBoostFPS()
 		else
-			ui.boostSummary.Text = applyBoostFPS()
+			applyBoostFPS()
 		end
+		renderBoostSummary()
 	end)
-makeLabel("🖥️ ทำงานเฉพาะฝั่ง Client (เครื่องคุณเท่านั้น):", perfTab, UDim2.new(1, 0, 0, 22), UDim2.new(0, 4, 0, 52), COLOR_DIM, 13)
-ui.boostSummary = makeLabel("สถานะ: ยังไม่ได้เปิด Boost FPS", perfTab, UDim2.new(1, 0, 0, 80), UDim2.new(0, 4, 0, 76), COLOR_TEXT, 13)
-makeLabel("📋 สิ่งที่ทำเมื่อเปิด:\n• ลด QualityLevel ลงขั้นต่ำสุด\n• ทุก Part เป็น SmoothPlastic (ดินน้ำมัน) + ปิดสะท้อน + ปิดเงา\n• ล้าง Texture/Decal/MeshPart texture/พื้นผิว PBR\n• ปิด Bloom/Blur/SunRays/ColorCorrection/DepthOfField, Particle, Beam, Trail, Fire, Smoke, Sparkles\n• ล้างหมอก + ปิดหญ้า/คลื่นน้ำของ Terrain\n• ของที่โหลดเข้ามาทีหลังถูกแปลงอัตโนมัติ\n\nกดปุ่มอีกครั้งเพื่อคืนสภาพเดิมทั้งหมด", perfTab, UDim2.new(1, 0, 1, -164), UDim2.new(0, 4, 0, 160), COLOR_DIM, 12)
+makeLabel("perfClient", perfTab, UDim2.new(1, 0, 0, 22), UDim2.new(0, 4, 0, 52), COLOR_DIM, 13)
+ui.boostSummary = makeLabel("boostIdle", perfTab, UDim2.new(1, 0, 0, 80), UDim2.new(0, 4, 0, 76), COLOR_TEXT, 13)
+makeLabel("perfList", perfTab, UDim2.new(1, 0, 1, -164), UDim2.new(0, 4, 0, 160), COLOR_DIM, 12)
+
+-- ---------- แท็บ 6: ตั้งค่า (กันหลุด / ภาษา / ธีมสี / FOV กล้อง) ----------
+local settingsTab = tabFrames[6]
+makeLabel("secGeneral", settingsTab, UDim2.new(1, 0, 0, 20), UDim2.new(0, 4, 0, 4), COLOR_ACCENT, 13)
+makeToggleButton("btnAntiAfk", settingsTab, UDim2.new(1, 0, 0, 30), UDim2.new(0, 0, 0, 26),
+	function() return antiAfkEnabled end,
+	function() setAntiAfk(not antiAfkEnabled) end)
+makeLabel("noteAntiAfk", settingsTab, UDim2.new(1, 0, 0, 34), UDim2.new(0, 4, 0, 58), COLOR_DIM, 12)
+makeLabel("secLang", settingsTab, UDim2.new(1, 0, 0, 20), UDim2.new(0, 4, 0, 96), COLOR_ACCENT, 13)
+makeButton("btnLang", settingsTab, UDim2.new(1, 0, 0, 30), UDim2.new(0, 0, 0, 118), function()
+	if toggleLanguage then toggleLanguage() end
+end)
+makeLabel("secTheme", settingsTab, UDim2.new(1, 0, 0, 20), UDim2.new(0, 4, 0, 152), COLOR_ACCENT, 13)
+local themeSlider = makeSlider(settingsTab, 174, "slHue", 0, 360, themeHue, function(v)
+	themeHue = v
+	themeFromHue(v)      -- สร้างชุดสีใหม่จากโทนสี
+	if applyTheme then applyTheme() end -- ทาสี GUI ทั้งหมดทันที
+end)
+-- ปุ่มชุดสีสำเร็จรูป (setFromFraction เรียก onChange ให้เอง → สีเปลี่ยนทันที)
+local function setThemeHue(h)
+	themeSlider.setFromFraction(h / 360)
+end
+makeButton("pre1", settingsTab, UDim2.new(0.25, -6, 0, 28), UDim2.new(0, 0, 0, 222), function() setThemeHue(258) end)
+makeButton("pre2", settingsTab, UDim2.new(0.25, -6, 0, 28), UDim2.new(0.25, 2, 0, 222), function() setThemeHue(195) end)
+makeButton("pre3", settingsTab, UDim2.new(0.25, -6, 0, 28), UDim2.new(0.5, 4, 0, 222), function() setThemeHue(145) end)
+makeButton("pre4", settingsTab, UDim2.new(0.25, -6, 0, 28), UDim2.new(0.75, 6, 0, 222), function() setThemeHue(355) end)
+makeSlider(settingsTab, 254, "slCamFov", 30, 120, 70, function(v)
+	camFovLock = v -- บังคับ FOV ต่อเนื่อง (ลูป Heartbeat จะเขียนกลับถ้าเกมแก้ทับ)
+	local cam = workspace.CurrentCamera
+	if cam then cam.FieldOfView = v end
+end)
+ui.serverLabel = makeLabel("serverInfo", settingsTab, UDim2.new(1, 0, 0, 34), UDim2.new(0, 4, 0, 302), COLOR_DIM, 12)
+makeButton("btnResetTheme", settingsTab, UDim2.new(1, 0, 0, 28), UDim2.new(0, 0, 0, 340), function()
+	setThemeHue(258) -- รีเซ็ตเป็นธีมม่วง-น้ำเงินค่าเริ่มต้น
+end)
+
+-- ---------- แท็บ 7: ประวัติ (Log) ----------
+local logTab = tabFrames[7]
+makeLabel("logHeader", logTab, UDim2.new(1, 0, 0, 20), UDim2.new(0, 4, 0, 4), COLOR_ACCENT, 13)
+ui.logCountLabel = makeLabel("logCount", logTab, UDim2.new(1, -104, 0, 22), UDim2.new(0, 4, 0, 28), COLOR_DIM, 12)
+makeButton("logClear", logTab, UDim2.new(0, 96, 0, 26), UDim2.new(1, -100, 0, 24), function()
+	table.clear(logEntries)
+	renderLog()
+end)
+local logScroll = Instance.new("ScrollingFrame")
+logScroll.Size = UDim2.new(1, -8, 1, -58)
+logScroll.Position = UDim2.new(0, 4, 0, 54)
+logScroll.BackgroundTransparency = 1
+logScroll.BorderSizePixel = 0
+logScroll.ScrollBarThickness = 6
+logScroll.ScrollBarImageColor3 = COLOR_ACCENT
+logScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+logScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y -- ความสูงตามเนื้อหา
+logScroll.Parent = logTab
+addCorner(logScroll, 6)
+ui.logLabel = Instance.new("TextLabel")
+ui.logLabel.Size = UDim2.new(1, -6, 0, 0)
+ui.logLabel.AutomaticSize = Enum.AutomaticSize.Y
+ui.logLabel.BackgroundTransparency = 1
+ui.logLabel.Font = FONT
+ui.logLabel.TextSize = 12
+ui.logLabel.TextColor3 = COLOR_TEXT
+ui.logLabel.TextXAlignment = Enum.TextXAlignment.Left
+ui.logLabel.TextYAlignment = Enum.TextYAlignment.Top
+ui.logLabel.TextWrapped = true
+ui.logLabel:SetAttribute("DevThemeRole", "text") -- ธีม
+ui.logLabel.Parent = logScroll
 
 -- ===================== เปิด/ปิดเมนู + ลากหน้าต่าง =====================
 closeButton.MouseButton1Click:Connect(function()
@@ -969,23 +1754,122 @@ UserInputService.InputChanged:Connect(function(input)
 	end
 end)
 
+-- ===================== ทาสีธีมใหม่ทั้งหมด =====================
+applyTheme = function()
+	-- เดิน GUI ทั้งหมดแล้วทาสีตาม role ที่ติด Attribute ไว้ตอนสร้าง
+	for _, inst in ipairs(screenGui:GetDescendants()) do
+		local role = inst:GetAttribute("DevThemeRole")
+		if role == "button" then
+			inst.BackgroundColor3 = COLOR_BTN
+			if inst:IsA("TextButton") then inst.TextColor3 = COLOR_TEXT end
+		elseif role == "text" then
+			inst.TextColor3 = COLOR_TEXT
+		elseif role == "dim" then
+			inst.TextColor3 = COLOR_DIM
+		elseif role == "accent" then
+			inst.TextColor3 = COLOR_ACCENT
+		elseif role == "accentFill" then
+			inst.BackgroundColor3 = COLOR_ACCENT
+		elseif role == "knob" then
+			inst.BackgroundColor3 = COLOR_TEXT
+		elseif role == "bar" then
+			inst.BackgroundColor3 = COLOR_BAR
+		end
+	end
+	-- ส่วนที่ไม่ได้ติด role (gradient/ขอบ/ปุ่มเปิดเมนู/วงกลม FOV)
+	windowGradient.Color = ColorSequence.new(hslToColor(themeHue, 0.42, 0.12), hslToColor(themeHue + 40, 0.5, 0.06))
+	windowStroke.Color = COLOR_ACCENT
+	barGradient.Color = ColorSequence.new(COLOR_ACCENT, COLOR_ACCENT2)
+	coverGradient.Color = ColorSequence.new(COLOR_ACCENT, COLOR_ACCENT2)
+	tabBar.BackgroundColor3 = COLOR_BAR
+	sideDivider.BackgroundColor3 = COLOR_ACCENT2
+	menuToggleButton.BackgroundColor3 = COLOR_ACCENT
+	menuToggleButton.TextColor3 = COLOR_DARK
+	fovStroke.Color = COLOR_ACCENT2
+	if ui.fireButton then ui.fireButton.TextColor3 = COLOR_DARK end -- ปุ่ม 🔥 (พื้นหลังเด้งจาก accentFill แล้ว)
+	-- ทาสีปุ่มสลับที่กำลัง "เปิด" + แท็บที่เลือกอยู่ใหม่
+	refreshToggles()
+	switchTab(currentTab)
+end
+
+-- ===================== แสดงผล Log ในแท็บประวัติ =====================
+-- แปลง key → ข้อความตามภาษาปัจจุบันตอนแสดงผล (สลับภาษาแล้วของเก่าแปลใหม่ทันที)
+renderLog = function()
+	if not ui.logLabel then return end
+	local lines = {}
+	for _, e in ipairs(logEntries) do
+		local text = T(e.key)
+		if #e.args > 0 then
+			local ok, formatted = pcall(string.format, text, table.unpack(e.args))
+			if ok then text = formatted end
+		end
+		table.insert(lines, string.format("[%s] %s", formatDuration(os.clock() - e.time), text))
+	end
+	ui.logLabel.Text = (#lines > 0) and table.concat(lines, "\n") or T("logEmpty")
+	if ui.logCountLabel then
+		ui.logCountLabel.Text = string.format(T("logCount"), #logEntries, MAX_LOG)
+	end
+end
+
+-- ===================== เปลี่ยนภาษาทั้งเมนู =====================
+applyLanguage = function()
+	-- 1) ป้ายข้อความนิ่งทั้งหมด: อัปเดตตาม key (ตัวที่ถูกทำลายแล้วจะถูกกวาดทิ้ง)
+	for i = #textRegistry, 1, -1 do
+		local entry = textRegistry[i]
+		if not entry.inst.Parent then
+			table.remove(textRegistry, i)
+		else
+			entry.inst.Text = T(entry.key)
+		end
+	end
+	-- 2) ข้อความที่ประกอบเอง (สถานะ/ป้ายไดนามิก/ปุ่ม Waypoint/ข้อความ Boost)
+	if refreshToggles then refreshToggles() end
+	if rebuildWaypointList then rebuildWaypointList() end
+	renderBoostSummary()
+	switchTab(currentTab)
+	if renderLog then renderLog() end -- แปลข้อความในประวัติใหม่ตามภาษาปัจจุบัน
+	devLog("lgLang", lang == "th" and "ไทย" or "English")
+end
+
+toggleLanguage = function()
+	lang = (lang == "th") and "en" or "th"
+	applyLanguage()
+end
+
+-- ประกอบป้ายสถิติ FPS/Ping จาก lastStats (เรียกตอนมีตัวอย่างใหม่ + เปลี่ยนภาษา)
+local function updateStatsLabel()
+	if not ui.statLabel then return end
+	ui.statLabel.Text = string.format(T("statFps"), lastStats.fmin, lastStats.favg, lastStats.fmax)
+		.. "\n" .. string.format(T("statPing"), lastStats.pmin, lastStats.pavg, lastStats.pmax)
+end
+
 -- ===================== อัปเดตป้ายทั้งหมด =====================
 refreshToggles = function()
 	for _, item in ipairs(toggleRegistry) do
 		local on = item.getState()
-		item.button.Text = item.name .. (on and "  [เปิด]" or "  [ปิด]")
+		item.button.Text = T(item.key) .. "  " .. (on and T("on") or T("off"))
 		item.button.BackgroundColor3 = on and COLOR_ACCENT or COLOR_BTN
 		item.button.TextColor3 = on and COLOR_DARK or COLOR_TEXT
 	end
-	if ui.walkSpeedLabel then ui.walkSpeedLabel.Text = "🏃 ความเร็ววิ่ง: " .. walkSpeedValue end
-	if ui.flySpeedLabel then ui.flySpeedLabel.Text = "🚀 ความเร็วบิน: " .. flySpeed end
-	if ui.point1Label then ui.point1Label.Text = "Point 1: " .. (point1 and formatVector3(point1.Position) or "(ยังไม่ได้บันทึก)") end
-	if ui.point2Label then ui.point2Label.Text = "Point 2: " .. (point2 and formatVector3(point2.Position) or "(ยังไม่ได้บันทึก)") end
-	if ui.waypointCountLabel then ui.waypointCountLabel.Text = "ที่บันทึก: " .. #waypoints .. " จุด" end
+	for _, s in ipairs(sliderRegistry) do -- caption ทุกสไลเดอร์ ตามภาษาปัจจุบัน
+		s.caption.Text = T(s.key) .. ": " .. s.getValue()
+	end
+	if ui.aimPartButton then ui.aimPartButton.Text = T("btnAimPart") .. ": " .. aimPartName() end
+	if ui.point1Label then ui.point1Label.Text = string.format(T("p1Label"), point1 and formatVector3(point1.Position) or T("noPoint")) end
+	if ui.point2Label then ui.point2Label.Text = string.format(T("p2Label"), point2 and formatVector3(point2.Position) or T("noPoint")) end
+	if ui.waypointCountLabel then ui.waypointCountLabel.Text = string.format(T("wpCount"), #waypoints) end
 	if ui.statusLabel then ui.statusLabel.Text = statusString() end
+	updateStatsLabel()
 end
 
+-- ตั้งค่าป้ายไดนามิกครั้งแรก (หลังจากนี้ heartbeat จะอัปเดตทุก 0.25 วินาที)
+ui.posLabel.Text = T("homePos") .. T("noChar")
+ui.timeLabel.Text = T("uptime") .. "00:00:00"
+ui.serverLabel.Text = string.format(T("serverInfo"), #Players:GetPlayers(), Players.MaxPlayers, game.JobId)
+renderBoostSummary()
 rebuildWaypointList()
+updateStatsLabel()
+renderLog()
 refreshToggles()
 switchTab(1)
 
@@ -1027,6 +1911,12 @@ end)
 
 local lastInfoUpdate = 0
 RunService.Heartbeat:Connect(function()
+	-- บังคับ FOV กล้องถ้าเปิดปรับไว้ (เกมอาจทับตอน respawn/ซูม)
+	if camFovLock then
+		local cam = workspace.CurrentCamera
+		if cam and cam.FieldOfView ~= camFovLock then cam.FieldOfView = camFovLock end
+	end
+
 	-- ประตูวาร์ปฝั่ง Client
 	if rootPart and rootPart.Parent and #gates > 0 then
 		local now = os.clock()
@@ -1051,9 +1941,61 @@ RunService.Heartbeat:Connect(function()
 	local now = os.clock()
 	if now - lastInfoUpdate >= 0.25 then
 		lastInfoUpdate = now
-		ui.posLabel.Text = "พิกัดตัวละคร: " .. (rootPart and rootPart.Parent and formatVector3(rootPart.Position) or "(ยังไม่มีตัวละคร)")
-		ui.fpsLabel.Text = string.format("FPS: %d | Ping: %d ms", fps, math.floor(player:GetNetworkPing() * 1000))
-		ui.timeLabel.Text = "เวลาที่เปิดใช้งาน: " .. formatDuration(os.clock() - scriptStartTime)
+		local pingMs = math.floor(player:GetNetworkPing() * 1000)
+		ui.posLabel.Text = T("homePos") .. (rootPart and rootPart.Parent and formatVector3(rootPart.Position) or T("noChar"))
+		ui.fpsLabel.Text = string.format("FPS: %d | Ping: %d ms", fps, pingMs)
+		ui.timeLabel.Text = T("uptime") .. formatDuration(os.clock() - scriptStartTime)
+		ui.serverLabel.Text = string.format(T("serverInfo"), #Players:GetPlayers(), Players.MaxPlayers, game.JobId)
+		-- 📈 กราฟ FPS/Ping: เก็บตัวอย่างล่าสุด (ข้ามเฟรมแรกที่ fps = 0)
+		if fps > 0 then
+			table.insert(fpsHistory, fps)
+			table.insert(pingHistory, pingMs)
+			while #fpsHistory > FPS_GRAPH_SAMPLES do table.remove(fpsHistory, 1) end
+			while #pingHistory > FPS_GRAPH_SAMPLES do table.remove(pingHistory, 1) end
+		end
+		if #fpsHistory > 0 then
+			local fmin, fmax, fsum = math.huge, -math.huge, 0
+			local pmin, pmax, psum = math.huge, -math.huge, 0
+			for i, v in ipairs(fpsHistory) do
+				fsum = fsum + v
+				if v < fmin then fmin = v end
+				if v > fmax then fmax = v end
+				local p = pingHistory[i]
+				psum = psum + p
+				if p < pmin then pmin = p end
+				if p > pmax then pmax = p end
+			end
+			local n = #fpsHistory
+			lastStats.fmin = math.floor(fmin); lastStats.fmax = math.floor(fmax); lastStats.favg = fsum / n
+			lastStats.pmin = math.floor(pmin); lastStats.pmax = math.floor(pmax); lastStats.pavg = psum / n
+		end
+		updateStatsLabel()
+		-- วาดแท่งกราฟ: สีบอกประสิทธิภาพ (เขียว ≥55 / เหลือง ≥30 / แดง <30) — คงสีสัญลักษณ์ ไม่ผ่านธีม
+		for i = 1, FPS_GRAPH_SAMPLES do
+			local bar = fpsGraphBars[i]
+			if bar then
+				local v = fpsHistory[i]
+				if v then
+					bar.Size = UDim2.new(1 / FPS_GRAPH_SAMPLES, -2, 0, math.clamp(v / 60, 0.06, 1) * 38)
+					bar.BackgroundColor3 = (v >= 55 and Color3.fromRGB(80, 200, 120))
+						or (v >= 30 and Color3.fromRGB(230, 190, 60))
+						or Color3.fromRGB(230, 90, 80)
+					bar.Visible = true
+				else
+					bar.Visible = false
+				end
+			end
+		end
+		-- ระบบต่อสู้: รีเฟรช ESP / รายการเป้า / ค่ารีโหลด 4 ครั้ง/วินาที
+		if espEnabled then refreshESP() end
+		if aimbotEnabled then refreshAimCandidates() end
+		if fastReloadEnabled then scanToolsForReload() end
 		ui.statusLabel.Text = statusString()
 	end
+end)
+
+-- หักกล้อง Aimbot หลังกล้องเกมเสร็จทุกเฟรม + อัปเดตวงกลม FOV (ทำงานเฉพาะตอนกดยิง)
+RunService:BindToRenderStep("DevAimBendStep", Enum.RenderPriority.Camera.Value + 1, function()
+	aimCameraStep()
+	updateFovCircle()
 end)
