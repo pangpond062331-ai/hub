@@ -15,6 +15,7 @@ local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
 local Lighting = game:GetService("Lighting")
 local VirtualUser = game:GetService("VirtualUser") -- ใช้ในระบบกันหลุด (Anti-AFK)
+local ReplicatedStorage = game:GetService("ReplicatedStorage") -- ใช้ในโหมดหายตัว (RemoteEvent แจ้งเซิร์ฟ)
 
 -- ===================== ตัวแปรหลัก =====================
 local player = Players.LocalPlayer
@@ -46,6 +47,7 @@ local aimbotEnabled = false       -- Aimbot เปิด/ปิด (ทำงา
 local fovCircleEnabled = false    -- แสดงวงกลม FOV กลางจอหรือไม่
 local espEnabled = false          -- ESP ศัตรู เปิด/ปิด
 local fastReloadEnabled = false   -- รีโหลดไว เปิด/ปิด
+local invisEnabled = false        -- โหมดหายตัว (ซ่อนจากทุกคน — ต้องมีสคริปต์เซิร์ฟ ดู setInvisibility)
 local fireAiming = false          -- กำลังกดปุ่มซ้ายค้าง (ยิง)
 local aimFov = 45                 -- เส้นผ่านศูนย์กลางวงกลมเล็ง (องศา)
 local aimRange = 800              -- ระยะเล็งสูงสุด (สตั๊ด)
@@ -144,6 +146,13 @@ local STR = {
 		lgAfkOn = "🛡️ เปิดกันหลุด (Anti-AFK)", lgAfkOff = "🛡️ ปิดกันหลุด (Anti-AFK)",
 		lgAfkIdle = "🛡️ กันหลุด: เกมเตือน idle → จำลองขยับเมาส์แล้ว",
 		lgLang = "🌐 เปลี่ยนภาษาเป็น %s", lgBoostOn = "⚡ เปิด Boost FPS (ดินน้ำมัน)", lgBoostRestore = "⚡ คืนสภาพกราฟฟิกเดิมแล้ว",
+		btnInvis = "👻 โหมดหายตัว (ทุกคนไม่เห็น)",
+		lgInvisOn = "👻 เปิดโหมดหายตัว — เซิร์ฟเวอร์ซ่อนตัวจากทุกคนแล้ว",
+		lgInvisOff = "👻 ปิดโหมดหายตัว — มองเห็นตามปกติแล้ว",
+		lgInvsNeedServer = "⚠️ ยังไม่ได้ติดตั้งสคริปต์ฝั่งเซิร์ฟ — คัดลอกซอร์สจาก Output ไปวางใน ServerScriptService หนึ่งครั้ง แล้วเปิดใหม่",
+		lgReloadHit = "🔁 พบค่าโหลดกระสุน: %s → เร่งเป็น %s วินาที",
+		lgReloadNoHit = "⚠️ ไม่พบค่า reload/refill ใน Value/Attribute ของ Tool → เวลารอโหลดน่าจะอยู่ในโค้ดสคริปต์ (LocalScript เปลี่ยนค่าในโค้ดปืนไม่ได้)",
+		lgReloadNoTool = "⚠️ ไม่พบ Tool ปืนในมือ/กระเป๋า — ถือปืนไว้แล้วระบบจะสแกนให้เองทุก 0.25 วิ",
 	},
 	en = {
 		on = "[On]", off = "[Off]",
@@ -201,6 +210,13 @@ local STR = {
 		lgAfkOn = "🛡️ Anti-AFK ON", lgAfkOff = "🛡️ Anti-AFK OFF",
 		lgAfkIdle = "🛡️ Anti-AFK: idle warning → fake mouse move sent",
 		lgLang = "🌐 Switched language to %s", lgBoostOn = "⚡ Boost FPS (clay) enabled", lgBoostRestore = "⚡ Original graphics restored",
+		btnInvis = "👻 Invisible mode (hidden from everyone)",
+		lgInvisOn = "👻 Invisible ON — server hides you from everyone",
+		lgInvisOff = "👻 Invisible OFF — visible again",
+		lgInvsNeedServer = "⚠️ Server script not installed yet — copy the source from Output into ServerScriptService once, then toggle again",
+		lgReloadHit = "🔁 Found reload value(s): %s → set to %s seconds",
+		lgReloadNoHit = "⚠️ No reload/refill value or attribute found on Tools → reload wait is likely hardcoded in the script (a LocalScript cannot change another script's code)",
+		lgReloadNoTool = "⚠️ No Tool found in hands/backpack — equip a gun and it rescans every 0.25 s",
 	},
 }
 
@@ -1027,10 +1043,13 @@ end
 -- ---------- รีโหลดไว (ทำงานกับปืนที่เก็บเวลาโหลดใน Value/Attribute ของ Tool) ----------
 -- ข้อจำกัดของ Roblox: LocalScript แตะตัวแปรใน LocalScript ของปืนไม่ได้ → ถ้าเกมเก็บเวลาโหลดในโค้ด โหมดนี้จะไม่มีผล
 local FAST_RELOAD_TIME = 0.05 -- วินาทีที่เร่งไป
+local reloadHitNames = {}     -- ชื่อค่าที่เจอบนปืน (ใช้รายงานครั้งแรก)
+local reloadReported = {}     -- กันรายงานซ้ำ { hit, noHit, noTool } (รีเซ็ตทุกครั้งที่เปิดใช้)
 
 local function isReloadTimeName(name)
-	-- จับชื่อที่มีคำว่า reload เช่น ReloadTime, reloadDelay, ReloadCooldown
-	return string.find(string.lower(name), "reload", 1, true) ~= nil
+	-- จับชื่อที่มี reload เช่น ReloadTime, reloadDelay / refill เช่น RefillTime
+	local lower = string.lower(name)
+	return string.find(lower, "reload", 1, true) ~= nil or string.find(lower, "refill", 1, true) ~= nil
 end
 
 local function scanToolsForReload()
@@ -1045,34 +1064,67 @@ local function scanToolsForReload()
 			if child:IsA("Tool") then tools[#tools + 1] = child end
 		end
 	end
-	for _, tool in ipairs(tools) do
-		-- Value ที่เก็บเวลาโหลด (เช่น NumberValue "ReloadTime")
-		for _, valueObj in ipairs(tool:GetDescendants()) do
-			if (valueObj:IsA("NumberValue") or valueObj:IsA("IntValue")) and isReloadTimeName(valueObj.Name) then
-				if not reloadTracked[valueObj] then
-					reloadTracked[valueObj] = true
-					table.insert(reloadBackup, { inst = valueObj, attr = nil, value = valueObj.Value })
-				end
-				if valueObj.Value > FAST_RELOAD_TIME then valueObj.Value = FAST_RELOAD_TIME end
-			end
+	table.clear(reloadHitNames)
+	if #tools == 0 then
+		if not reloadReported.noTool then
+			reloadReported.noTool = true
+			devLog("lgReloadNoTool")
 		end
-		-- Attribute บน Tool ที่เป็นตัวเลขและชื่อเกี่ยวกับ reload
-		for attrName, attrValue in pairs(tool:GetAttributes()) do
+		return
+	end
+
+	local function considerValue(valueObj)
+		-- Value ที่เก็บเวลาโหลด (เช่น NumberValue "ReloadTime")
+		if (valueObj:IsA("NumberValue") or valueObj:IsA("IntValue")) and isReloadTimeName(valueObj.Name) then
+			if not reloadTracked[valueObj] then
+				reloadTracked[valueObj] = true
+				table.insert(reloadBackup, { inst = valueObj, attr = nil, value = valueObj.Value })
+			end
+			if valueObj.Value > FAST_RELOAD_TIME then valueObj.Value = FAST_RELOAD_TIME end
+			reloadHitNames[valueObj.Name] = true
+		end
+	end
+	local function considerAttrs(inst)
+		-- Attribute ตัวเลขชื่อเกี่ยวกับ reload — สแกนทุกชั้น (ของเดิมสแกนเฉพาะบนตัว Tool)
+		for attrName, attrValue in pairs(inst:GetAttributes()) do
 			if typeof(attrValue) == "number" and isReloadTimeName(attrName) then
-				local key = tostring(tool) .. "|" .. attrName
+				local key = tostring(inst) .. "|" .. attrName
 				if not reloadTracked[key] then
 					reloadTracked[key] = true
-					table.insert(reloadBackup, { inst = tool, attr = attrName, value = attrValue })
+					table.insert(reloadBackup, { inst = inst, attr = attrName, value = attrValue })
 				end
-				if attrValue > FAST_RELOAD_TIME then tool:SetAttribute(attrName, FAST_RELOAD_TIME) end
+				if attrValue > FAST_RELOAD_TIME then inst:SetAttribute(attrName, FAST_RELOAD_TIME) end
+				reloadHitNames[attrName] = true
 			end
 		end
+	end
+	for _, tool in ipairs(tools) do
+		considerAttrs(tool) -- ตัว Tool เอง
+		for _, desc in ipairs(tool:GetDescendants()) do
+			considerValue(desc)
+			considerAttrs(desc)
+		end
+	end
+
+	-- รายงานผลครั้งแรกของการเปิดใช้ (บอกชัดว่าเจอค่าไหน หรือไม่เจอเพราะอะไร)
+	local names = {}
+	for n in pairs(reloadHitNames) do names[#names + 1] = n end
+	if #names > 0 then
+		if not reloadReported.hit then
+			reloadReported.hit = true
+			table.sort(names)
+			devLog("lgReloadHit", table.concat(names, ", "), tostring(FAST_RELOAD_TIME))
+		end
+	elseif not reloadReported.noHit then
+		reloadReported.noHit = true
+		devLog("lgReloadNoHit")
 	end
 end
 
 local function setFastReload(enabled)
 	fastReloadEnabled = enabled
 	if fastReloadEnabled then
+		reloadReported = {} -- รายงานผลใหม่ทุกครั้งที่เปิดใช้
 		scanToolsForReload()
 		devLog("lgReloadOn")
 	else
@@ -1086,8 +1138,153 @@ local function setFastReload(enabled)
 		end
 		reloadBackup = {}
 		reloadTracked = {}
+		reloadReported = {}
 		devLog("lgReloadOff")
 	end
+end
+
+-- ===================== โหมดหายตัว (ซ่อนจากทุกคน — ต้องมีสคริปต์เซิร์ฟ) =====================
+-- LocalScript คนเดียวทำให้ "คนอื่น" ไม่เห็นไม่ได้ (ความโปร่งแสงต้องเซิร์ฟเป็นคนตั้ง)
+-- วิธีใช้: กดปุ่มครั้งแรก → จะพิมพ์ซอร์สสคริปต์ลง Output (และเก็บใน StringValue ที่ ReplicatedStorage)
+--          คัดลอกไปวางเป็น Script ใน ServerScriptService หนึ่งครั้ง แล้วกดปุ่มใหม่ → ใช้ได้จริงทุกคนในแมพ
+local INVIS_SERVER_SOURCE = [==[
+-- ===== DevInvisibilityServer: ฝั่งเซิร์ฟของ "โหมดหายตัว" (เกมของตัวเอง) =====
+-- วางเป็น Script ใน ServerScriptService หนึ่งครั้ง แล้วกด Play
+-- ได้ยิน RemoteEvent "DevInvsRemote" ใน ReplicatedStorage: true = ซ่อน, false = คืนสภาพ
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local remote = ReplicatedStorage:FindFirstChild("DevInvsRemote")
+if not remote then
+	remote = Instance.new("RemoteEvent")
+	remote.Name = "DevInvsRemote"
+	remote.Parent = ReplicatedStorage
+end
+
+-- sessions[player] = { hidden, backup = { [instance] = ค่าเดิม }, disp = { name, health } }
+local sessions = {}
+
+local function applyHide(player, on)
+	local session = sessions[player]
+	if not session then return end
+	local character = player.Character
+	if not character then return end
+	for _, inst in ipairs(character:GetDescendants()) do
+		if inst:IsA("BasePart") or inst:IsA("Decal") or inst:IsA("Texture") then
+			-- BasePart / หน้า / เท็กซ์เจอร์บนตัว: จำค่าเดิมรอบแรกที่เจอ แล้วซ่อน/คืน
+			local saved = session.backup[inst]
+			if not saved then
+				saved = inst.Transparency
+				session.backup[inst] = saved
+			end
+			if on then
+				inst.Transparency = 1
+			else
+				inst.Transparency = saved
+			end
+		elseif inst:IsA("BillboardGui") or inst:IsA("SurfaceGui") then
+			-- ป้ายชื่อ/เลือด/Gui ที่ติดตัว (ทั้งของระบบและของเกม): ปิดตอนซ่อน
+			local saved = session.backup[inst]
+			if not saved then
+				saved = inst.Enabled
+				session.backup[inst] = saved
+			end
+			if on then
+				inst.Enabled = false
+			else
+				inst.Enabled = saved
+			end
+		end
+	end
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+	if humanoid then
+		if not session.disp then
+			session.disp = { name = humanoid.NameDisplayDistance, health = humanoid.HealthDisplayDistance }
+		end
+		humanoid.NameDisplayDistance = on and 0 or session.disp.name
+		humanoid.HealthDisplayDistance = on and 0 or session.disp.health
+	end
+end
+
+local function watchCharacter(player)
+	player.CharacterAdded:Connect(function(character)
+		local session = sessions[player]
+		if session and session.hidden then
+			-- เกิดใหม่ระหว่างที่ยังเปิดอยู่ → เคลียร์ของเก่า (instance เดิมถูกทำลายแล้ว) แล้วซ่อนใหม่
+			session.backup = {}
+			session.disp = nil
+			character:WaitForChild("Humanoid", 10)
+			task.wait(0.1) -- รอให้ parts โหลดครบก่อนซ่อน
+			applyHide(player, true)
+		end
+	end)
+end
+
+remote.OnServerEvent:Connect(function(player, wantHide)
+	if type(wantHide) ~= "boolean" then return end
+	local session = sessions[player]
+	if not session then
+		session = { hidden = false, backup = {}, disp = nil }
+		sessions[player] = session
+		watchCharacter(player)
+	end
+	session.hidden = wantHide
+	if wantHide then
+		session.backup = {}
+		session.disp = nil
+		applyHide(player, true) -- เก็บค่าเดิมก่อนซ่อน
+	else
+		applyHide(player, false) -- คืนค่าจาก backup ก่อน (ห้ามเคลียร์ก่อน ไม่งั้นคืนไม่ได้)
+		session.backup = {}
+		session.disp = nil
+	end
+	print("[DevInvisibilityServer] " .. player.Name .. " → ซ่อนตัว: " .. tostring(wantHide))
+end)
+
+Players.PlayerRemoving:Connect(function(player)
+	sessions[player] = nil
+end)
+
+-- วนเช็กทุก 0.5 วิ ระหว่างซ่อน: กันสคริปต์อื่น/การเกิดใหม่ทำให้ตัวโผล่กลางทาง
+task.spawn(function()
+	while true do
+		task.wait(0.5)
+		for player, session in pairs(sessions) do
+			if session.hidden and player.Parent then
+				applyHide(player, true)
+			end
+		end
+	end
+end)
+
+for _, player in ipairs(Players:GetPlayers()) do watchCharacter(player) end
+Players.PlayerAdded:Connect(watchCharacter)
+print("[DevInvisibilityServer] พร้อมใช้งาน — รอ RemoteEvent DevInvsRemote")
+]==]
+
+local function setInvisibility(enabled)
+	local remote = ReplicatedStorage:FindFirstChild("DevInvsRemote")
+	local ready = remote ~= nil and remote:IsA("RemoteEvent")
+	if not ready then
+		-- ยังไม่ได้ติดตั้งสคริปต์เซิร์ฟ → แจ้ง + ดัมป์ซอร์สให้คัดลอก (เหมือนระบบประตูวาร์ป)
+		devLog("lgInvsNeedServer")
+		if enabled then
+			print("[DevUtilityV2] ===== ซอร์สสคริปต์โหมดหายตัว (วางใน ServerScriptService) =====\n" .. INVIS_SERVER_SOURCE .. "\n===== จบ =====")
+			local stashName = "SourceCode_โหมดหายตัว_คัดลอกไปใส่ในScript"
+			if not ReplicatedStorage:FindFirstChild(stashName) then
+				local stash = Instance.new("StringValue")
+				stash.Name = stashName
+				stash.Value = INVIS_SERVER_SOURCE
+				stash.Parent = ReplicatedStorage
+			end
+		end
+		invisEnabled = false
+	else
+		invisEnabled = enabled
+		remote:FireServer(invisEnabled)
+		devLog(invisEnabled and "lgInvisOn" or "lgInvisOff")
+	end
+	if refreshToggles then refreshToggles() end
 end
 
 -- ===================== GUI =====================
@@ -1527,7 +1724,10 @@ end)
 ui.walkSpeedLabel = walkSlider.caption
 local flySlider = makeSlider(charTab, 238, "slFly", 25, 500, flySpeed, function(v) flySpeed = v end)
 ui.flySpeedLabel = flySlider.caption
-makeLabel("tipChar", charTab, UDim2.new(1, 0, 0, 60), UDim2.new(0, 4, 0, 292), COLOR_DIM, 13)
+makeToggleButton("btnInvis", charTab, fullBtnSize, UDim2.new(0, 0, 0, 286),
+	function() return invisEnabled end,
+	function() setInvisibility(not invisEnabled) end)
+makeLabel("tipChar", charTab, UDim2.new(1, 0, 0, 44), UDim2.new(0, 4, 0, 328), COLOR_DIM, 13)
 
 -- ---------- แท็บ 3: สร้างของ & วาร์ป ----------
 local spawnTab = tabFrames[3]
